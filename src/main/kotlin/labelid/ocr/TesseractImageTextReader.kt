@@ -54,7 +54,7 @@ class TesseractImageTextReader(
 
         ImageText(
             text = stdout,
-            engine = "tesseract",
+            engine = "tesseract-psm-$pageSegmentationMode",
             confidence = null,
             diagnostics = stderr.takeIf { it.isNotBlank() }?.let(::listOf).orEmpty(),
         )

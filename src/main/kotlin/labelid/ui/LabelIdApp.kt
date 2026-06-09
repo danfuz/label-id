@@ -3,6 +3,7 @@ package labelid.ui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,7 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.awtTransferable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -44,28 +49,70 @@ import labelid.domain.FieldCheck
 import labelid.domain.ImageInput
 import labelid.domain.VerificationReport
 import labelid.domain.VerificationStatus
-import labelid.ocr.TesseractImageTextReader
+import labelid.ocr.EnsembleImageTextReader
 import labelid.verification.VerificationService
 import org.jetbrains.skia.Image as SkiaImage
+import java.awt.datatransfer.DataFlavor
 import java.awt.FileDialog
 import java.awt.Frame
+import java.io.File
 import java.io.FilenameFilter
 import java.nio.file.Files
 import java.nio.file.Path
 
 @Composable
 fun LabelIdApp() {
-    val service = remember { VerificationService(TesseractImageTextReader()) }
+    val service = remember { VerificationService(EnsembleImageTextReader()) }
 
     var selectedImage by remember { mutableStateOf<Path?>(null) }
     var applicationText by remember { mutableStateOf("") }
     var report by remember { mutableStateOf<VerificationReport?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var isRunning by remember { mutableStateOf(false) }
+    var isDropTargetActive by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    fun selectImage(path: Path) {
+        selectedImage = path
+        report = null
+        error = null
+    }
+    val imageDropTarget = remember {
+        object : DragAndDropTarget {
+            override fun onStarted(event: DragAndDropEvent) {
+                isDropTargetActive = true
+            }
+
+            override fun onEntered(event: DragAndDropEvent) {
+                isDropTargetActive = true
+            }
+
+            override fun onExited(event: DragAndDropEvent) {
+                isDropTargetActive = false
+            }
+
+            override fun onEnded(event: DragAndDropEvent) {
+                isDropTargetActive = false
+            }
+
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                isDropTargetActive = false
+                val droppedImage = event.droppedImagePath() ?: return false
+                selectImage(droppedImage)
+                return true
+            }
+        }
+    }
 
     MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFFF7F7F4)) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .dragAndDropTarget(
+                    shouldStartDragAndDrop = { event -> event.droppedImagePath() != null },
+                    target = imageDropTarget,
+                ),
+            color = Color(0xFFF7F7F4),
+        ) {
             Row(
                 modifier = Modifier.fillMaxSize().padding(20.dp),
                 horizontalArrangement = Arrangement.spacedBy(18.dp),
@@ -84,13 +131,11 @@ fun LabelIdApp() {
                     ImagePicker(
                         selectedImage = selectedImage,
                         onPick = {
-                            selectedImage = pickImagePath()
-                            report = null
-                            error = null
+                            pickImagePath()?.let(::selectImage)
                         },
                     )
 
-                    ImagePreview(selectedImage)
+                    ImagePreview(selectedImage, isDropTargetActive)
 
                     OutlinedTextField(
                         value = applicationText,
@@ -169,19 +214,22 @@ private fun ImagePicker(
 }
 
 @Composable
-private fun ImagePreview(path: Path?) {
+private fun ImagePreview(path: Path?, isDropTargetActive: Boolean) {
     val bitmap = remember(path) { path?.let(::loadImageBitmap) }
+    val borderColor = if (isDropTargetActive) Color(0xFF256F9C) else Color(0xFFD5D8DA)
+    val backgroundColor = if (isDropTargetActive) Color(0xFFEAF5FB) else Color.White
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(230.dp)
-            .background(Color.White, RoundedCornerShape(8.dp))
-            .border(1.dp, Color(0xFFD5D8DA), RoundedCornerShape(8.dp))
+            .background(backgroundColor, RoundedCornerShape(8.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
             .padding(8.dp),
         contentAlignment = Alignment.Center,
     ) {
         when {
-            path == null -> Text("Image preview", color = Color(0xFF777D82))
+            isDropTargetActive -> Text("Drop image", color = Color(0xFF256F9C), fontWeight = FontWeight.SemiBold)
+            path == null -> Text("Choose or drop image", color = Color(0xFF777D82))
             bitmap == null -> Text("Preview unavailable", color = Color(0xFF777D82))
             else -> Image(
                 bitmap = bitmap,
@@ -320,19 +368,39 @@ private fun pickImagePath(): Path? {
     val dialog = FileDialog(null as Frame?, "Choose label image", FileDialog.LOAD).apply {
         isMultipleMode = false
         filenameFilter = FilenameFilter { _, name ->
-            name.lowercase().let {
-                it.endsWith(".png") ||
-                    it.endsWith(".jpg") ||
-                    it.endsWith(".jpeg") ||
-                    it.endsWith(".tif") ||
-                    it.endsWith(".tiff") ||
-                    it.endsWith(".bmp")
-            }
+            isSupportedImageName(name)
         }
     }
     dialog.isVisible = true
     return dialog.files.firstOrNull()?.toPath()
 }
+
+private fun DragAndDropEvent.droppedImagePath(): Path? =
+    droppedFilePaths().firstOrNull(::isSupportedImagePath)
+
+@OptIn(ExperimentalComposeUiApi::class)
+private fun DragAndDropEvent.droppedFilePaths(): List<Path> {
+    val transferable = awtTransferable
+    if (!transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) return emptyList()
+
+    return runCatching {
+        val files = transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
+        files.orEmpty().mapNotNull { (it as? File)?.toPath() }
+    }.getOrDefault(emptyList())
+}
+
+private fun isSupportedImagePath(path: Path): Boolean =
+    isSupportedImageName(path.fileName?.toString().orEmpty())
+
+private fun isSupportedImageName(name: String): Boolean =
+    name.lowercase().let {
+        it.endsWith(".png") ||
+            it.endsWith(".jpg") ||
+            it.endsWith(".jpeg") ||
+            it.endsWith(".tif") ||
+            it.endsWith(".tiff") ||
+            it.endsWith(".bmp")
+    }
 
 private fun loadImageBitmap(path: Path): ImageBitmap? =
     runCatching {

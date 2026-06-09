@@ -12,6 +12,26 @@ data class ImageText(
     val engine: String,
     val confidence: Double? = null,
     val diagnostics: List<String> = emptyList(),
+    val sourceTexts: List<ImageTextSource> = emptyList(),
+) {
+    fun sources(): List<ImageTextSource> =
+        sourceTexts.ifEmpty {
+            listOf(
+                ImageTextSource(
+                    text = text,
+                    engine = engine,
+                    confidence = confidence,
+                    diagnostics = diagnostics,
+                ),
+            )
+        }
+}
+
+data class ImageTextSource(
+    val text: String,
+    val engine: String,
+    val confidence: Double? = null,
+    val diagnostics: List<String> = emptyList(),
 )
 
 data class ExpectedLabelData(

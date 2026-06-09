@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import labelid.domain.CheckStatus
 import labelid.domain.ImageInput
 import labelid.domain.ImageText
+import labelid.domain.ImageTextSource
 import labelid.domain.VerificationStatus
 import labelid.ocr.ImageTextReader
 import java.nio.file.Path
@@ -63,6 +64,120 @@ class VerificationServiceTest {
     }
 
     @Test
+    fun passesFieldsUsingBestSourceFromMultipleOcrEngines() = runBlocking {
+        val service = VerificationService(
+            StaticImageTextReader(
+                ImageText(
+                    text = "combined",
+                    engine = "ensemble",
+                    sourceTexts = listOf(
+                        ImageTextSource(
+                            text = """
+                            750 mL
+                            ${GovernmentWarning.TEXT}
+                            """.trimIndent(),
+                            engine = "paddleocr",
+                        ),
+                        ImageTextSource(
+                            text = """
+                            COPPER HILL DISTILLING
+                            47% ALC/VOL
+                            ${GovernmentWarning.TEXT}
+                            """.trimIndent(),
+                            engine = "tesseract-psm-11",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = """
+                Brand Name: COPPER HILL DISTILLING
+                Net Contents: 750 mL
+                Alcohol Content: 47%
+            """.trimIndent(),
+        )
+
+        assertEquals(VerificationStatus.PASS, report.status)
+        assertTrue(report.fieldCheck("Brand Name").observed.orEmpty().contains("tesseract-psm-11"))
+        assertTrue(report.fieldCheck("Net Contents").observed.orEmpty().contains("paddleocr"))
+    }
+
+    @Test
+    fun passesWhenMultiWordTextFieldIsSplitButNearbyInOcrOrder() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                STRAIGHT RYE WHISKY
+                GOVERNMENT WARNING:
+                (1） According to the
+                surgeon
+                General
+                women should not drink alcoholic beverages
+                SINGLE BARREL
+                during pregnancy
+                because of the risk of
+                birth defects.
+                (2) Consumption of alcoholic beverages
+                STRAIGHT RYE
+                impairs yourabilityto drive acaroroperae
+                WHISKY
+                machinery,and may cause health problems.
+                750
+                ML
+                45%ALC/VOL
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = """
+                Brand Name: ABC
+                Fanciful Name: ABC SINGLE BARREL
+                Class/Type: STRAIGHT RYE WHISKY
+                Net Contents: 750 mL
+                Alcohol Content: 45%
+            """.trimIndent(),
+        )
+
+        assertEquals(CheckStatus.PASS, report.fieldCheck("Fanciful Name").status)
+        assertEquals(VerificationStatus.PASS, report.status)
+    }
+
+    @Test
+    fun failsWhenMultiWordTextFieldTokensAreTooFarApart() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                ${GovernmentWarning.TEXT}
+                unrelated filler one
+                unrelated filler two
+                unrelated filler three
+                unrelated filler four
+                unrelated filler five
+                unrelated filler six
+                unrelated filler seven
+                unrelated filler eight
+                SINGLE BARREL
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Fanciful Name: ABC SINGLE BARREL",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.fieldCheck("Fanciful Name").status)
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
+    @Test
     fun reviewsWhenNoComparableApplicationFieldsAreParsed() = runBlocking {
         val service = VerificationService(StaticTextReader(GovernmentWarning.TEXT))
 
@@ -74,10 +189,194 @@ class VerificationServiceTest {
         assertEquals(VerificationStatus.REVIEW, report.status)
     }
 
+    @Test
+    fun passesGovernmentWarningWhenNoisyOcrHasHeadingAnchorsAndCoverage() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                GOVERNMENT WARNING:
+                (1) According to the surgeon General
+                women should not drink alcoholic beverages
+                during pregnancy because of the risk of birth defects.
+                (2) Consumption of alcoholic beverages
+                impairs yourabilityto drive acaroroperae
+                machinery,and may cause health problems.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.PASS, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.PASS, report.status)
+    }
+
+    @Test
+    fun passesGovernmentWarningWhenHeadingWordsAreSplitByOneOcrToken() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                GOVERNMENT
+                According
+                WARNING:
+                to the Surgeon General, women should not drink alcoholic beverages
+                during pregnancy because of the risk of birth defects.
+                Consumption of alcoholic beverages impairs your ability to drive a car or operate
+                machinery, and may cause health problems.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.PASS, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.PASS, report.status)
+    }
+
+    @Test
+    fun failsGovernmentWarningWhenHeadingWordsAreSplitTooFarApart() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                GOVERNMENT
+                According
+                to
+                WARNING:
+                the Surgeon General, women should not drink alcoholic beverages
+                during pregnancy because of the risk of birth defects.
+                Consumption of alcoholic beverages impairs your ability to drive a car or operate
+                machinery, and may cause health problems.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
+    @Test
+    fun reviewsGovernmentWarningWhenEvidenceIsPartial() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                GOVERNMENT WARNING:
+                According to the Surgeon General women should not drink alcoholic beverages
+                during pregnancy because of the risk of birth defects.
+                Consumption impairs health problems.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.REVIEW, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.REVIEW, report.status)
+    }
+
+    @Test
+    fun failsGovernmentWarningWhenRiskAndHealthAnchorsAreMissing() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                GOVERNMENT WARNING:
+                According to the Surgeon General, women should not drink alcoholic beverages during pregnancy.
+                Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
+    @Test
+    fun failsGovernmentWarningWhenHeadingIsMissing() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                According to the Surgeon General, women should not drink alcoholic beverages
+                during pregnancy because of the risk of birth defects.
+                Consumption of alcoholic beverages impairs your ability to drive a car or operate
+                machinery, and may cause health problems.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
+    @Test
+    fun failsGovernmentWarningWhenHeadingIsNotUppercase() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                Government Warning:
+                (1) According to the Surgeon General, women should not drink alcoholic beverages
+                during pregnancy because of the risk of birth defects.
+                (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate
+                machinery, and may cause health problems.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
+    private fun labelid.domain.VerificationReport.governmentWarningCheck() =
+        checks.first { it.fieldName == "Government Warning" }
+
+    private fun labelid.domain.VerificationReport.fieldCheck(fieldName: String) =
+        checks.first { it.fieldName == fieldName }
+
     private class StaticTextReader(
         private val text: String,
     ) : ImageTextReader {
         override suspend fun readImage(image: ImageInput): ImageText =
             ImageText(text = text, engine = "test")
+    }
+
+    private class StaticImageTextReader(
+        private val imageText: ImageText,
+    ) : ImageTextReader {
+        override suspend fun readImage(image: ImageInput): ImageText =
+            imageText
     }
 }

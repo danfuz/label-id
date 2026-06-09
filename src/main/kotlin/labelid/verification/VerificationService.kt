@@ -5,6 +5,7 @@ import labelid.domain.ExpectedField
 import labelid.domain.FieldCheck
 import labelid.domain.FieldKind
 import labelid.domain.ImageInput
+import labelid.domain.ImageTextSource
 import labelid.domain.VerificationReport
 import labelid.domain.VerificationStatus
 import labelid.ocr.ImageTextReader
@@ -19,6 +20,7 @@ class VerificationService(
         val startedAt = System.nanoTime()
         val expected = parser.parse(rawApplicationText)
         val imageText = reader.readImage(image)
+        val textSources = imageText.sources()
         val checks = buildList {
             if (!expected.hasComparableFields()) {
                 add(
@@ -33,10 +35,10 @@ class VerificationService(
             }
 
             expected.comparableFields().forEach { field ->
-                add(checkField(field, imageText.text))
+                add(checkField(field, textSources))
             }
 
-            add(checkGovernmentWarning(imageText.text))
+            add(checkGovernmentWarning(textSources))
             add(
                 FieldCheck(
                     fieldName = "Government Warning Visual Style",
@@ -57,7 +59,17 @@ class VerificationService(
         )
     }
 
-    private fun checkField(field: ExpectedField, actualText: String): FieldCheck =
+    private fun checkField(field: ExpectedField, textSources: List<ImageTextSource>): FieldCheck =
+        bestSourceCheck(
+            fieldName = field.name,
+            expected = field.value,
+            checks = textSources.map { source ->
+                checkFieldInText(field, source.text).withSource(source.engine)
+            },
+            failMessage = "Expected text was not found by any OCR engine.",
+        )
+
+    private fun checkFieldInText(field: ExpectedField, actualText: String): FieldCheck =
         when (field.kind) {
             FieldKind.TEXT -> checkTextField(field, actualText)
             FieldKind.ALCOHOL_CONTENT -> checkAlcoholContent(field, actualText)
@@ -72,6 +84,16 @@ class VerificationService(
                 observed = field.value,
                 status = CheckStatus.PASS,
                 message = "Expected text appears on the label.",
+            )
+        }
+
+        if (TextNormalizer.containsOrderedTokenWindow(actualText, field.value)) {
+            return FieldCheck(
+                fieldName = field.name,
+                expected = field.value,
+                observed = field.value,
+                status = CheckStatus.PASS,
+                message = "Expected words appear in OCR order with limited separation.",
             )
         }
 
@@ -149,8 +171,19 @@ class VerificationService(
         }
     }
 
-    private fun checkGovernmentWarning(actualText: String): FieldCheck {
-        if (TextNormalizer.containsLoose(actualText, GovernmentWarning.TEXT)) {
+    private fun checkGovernmentWarning(textSources: List<ImageTextSource>): FieldCheck =
+        bestSourceCheck(
+            fieldName = "Government Warning",
+            expected = GovernmentWarning.TEXT,
+            checks = textSources.map { source ->
+                checkGovernmentWarningInText(source.text).withSource(source.engine)
+            },
+            failMessage = "Required government warning statement was not found by any OCR engine.",
+        )
+
+    private fun checkGovernmentWarningInText(actualText: String): FieldCheck {
+        val hasHeading = GovernmentWarning.hasExactHeading(actualText)
+        if (hasHeading && TextNormalizer.containsLoose(actualText, GovernmentWarning.TEXT)) {
             return FieldCheck(
                 fieldName = "Government Warning",
                 expected = GovernmentWarning.TEXT,
@@ -160,27 +193,73 @@ class VerificationService(
             )
         }
 
-        val expectedTokens = TextNormalizer.tokens(GovernmentWarning.TEXT)
+        val foundAnchors = GovernmentWarning.ANCHOR_TOKENS.count { TextNormalizer.containsLoose(actualText, it) }
+        val expectedTokens = TextNormalizer.tokens(GovernmentWarning.TEXT).distinct()
         val actualTokens = TextNormalizer.tokens(actualText).toSet()
         val coverage = expectedTokens.count { it in actualTokens }.toDouble() / expectedTokens.size
-        return if (coverage >= 0.9) {
-            FieldCheck(
-                fieldName = "Government Warning",
-                expected = GovernmentWarning.TEXT,
-                observed = "${(coverage * 100).toInt()}% token coverage",
-                status = CheckStatus.REVIEW,
-                message = "Most warning words were found, but OCR did not produce an exact normalized statement.",
-            )
-        } else {
-            FieldCheck(
-                fieldName = "Government Warning",
-                expected = GovernmentWarning.TEXT,
-                observed = "${(coverage * 100).toInt()}% token coverage",
+        val observed = buildList {
+            add(if (hasHeading) "heading found" else "heading missing")
+            add("$foundAnchors/${GovernmentWarning.ANCHOR_TOKENS.size} anchors")
+            add("${(coverage * 100).toInt()}% token coverage")
+        }.joinToString()
+        val status = when {
+            hasHeading && foundAnchors == GovernmentWarning.ANCHOR_TOKENS.size && coverage >= 0.70 -> CheckStatus.PASS
+            hasHeading && foundAnchors >= GovernmentWarning.REVIEW_ANCHOR_THRESHOLD && coverage >= 0.50 -> CheckStatus.REVIEW
+            else -> CheckStatus.FAIL
+        }
+        val message = when (status) {
+            CheckStatus.PASS -> "Required warning statement is strongly supported by OCR tokens."
+            CheckStatus.REVIEW -> "Government warning evidence is partial; review the label image."
+            CheckStatus.FAIL -> "Required government warning statement was not found."
+            CheckStatus.NOT_ASSESSED -> error("Government warning text check is always assessed.")
+        }
+
+        return FieldCheck(
+            fieldName = "Government Warning",
+            expected = GovernmentWarning.TEXT,
+            observed = observed,
+            status = status,
+            message = message,
+        )
+    }
+
+    private fun bestSourceCheck(
+        fieldName: String,
+        expected: String,
+        checks: List<FieldCheck>,
+        failMessage: String,
+    ): FieldCheck {
+        if (checks.isEmpty()) {
+            return FieldCheck(
+                fieldName = fieldName,
+                expected = expected,
+                observed = null,
                 status = CheckStatus.FAIL,
-                message = "Required government warning statement was not found.",
+                message = failMessage,
             )
         }
+
+        val best = checks.minWith(compareBy<FieldCheck> { it.status.rank }.thenByDescending { it.observed?.length ?: 0 })
+        return if (best.status == CheckStatus.FAIL && checks.size > 1) {
+            best.copy(message = failMessage)
+        } else {
+            best
+        }
     }
+
+    private fun FieldCheck.withSource(engine: String): FieldCheck =
+        copy(
+            observed = observed?.let { "$it [$engine]" },
+            message = "$message OCR source: $engine.",
+        )
+
+    private val CheckStatus.rank: Int
+        get() = when (this) {
+            CheckStatus.PASS -> 0
+            CheckStatus.REVIEW -> 1
+            CheckStatus.FAIL -> 2
+            CheckStatus.NOT_ASSESSED -> 3
+        }
 
     private fun summarize(checks: List<FieldCheck>): VerificationStatus =
         when {
@@ -194,6 +273,40 @@ class VerificationService(
 }
 
 object GovernmentWarning {
+    const val HEADING = "Government Warning"
+    const val REQUIRED_HEADING = "GOVERNMENT WARNING:"
     const val TEXT =
         "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems."
+    val ANCHOR_TOKENS = listOf(
+        "surgeon",
+        "general",
+        "impairs",
+        "drive",
+        "risk",
+        "birth",
+        "defects",
+        "health",
+        "problems",
+    )
+    val REVIEW_ANCHOR_THRESHOLD = (ANCHOR_TOKENS.size * 2 + 2) / 3
+
+    fun hasExactHeading(actualText: String): Boolean {
+        if (Regex("""\bGOVERNMENT\s+WARNING\s*:""").containsMatchIn(actualText)) {
+            return true
+        }
+
+        val tokens = Regex("""[A-Za-z]+:?""")
+            .findAll(actualText)
+            .map { it.value }
+            .toList()
+
+        return tokens.withIndex().any { (index, token) ->
+            token == "GOVERNMENT" &&
+                tokens.drop(index + 1)
+                    .take(MAX_INTERVENING_HEADING_TOKENS + 1)
+                    .any { it == "WARNING:" }
+        }
+    }
+
+    private const val MAX_INTERVENING_HEADING_TOKENS = 1
 }
