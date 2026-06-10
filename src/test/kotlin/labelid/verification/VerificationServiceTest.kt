@@ -477,16 +477,16 @@ class VerificationServiceTest {
     }
 
     @Test
-    fun acceptsImpailsAsGovernmentWarningImpairsAnchorOnly() = runBlocking {
+    fun acceptsOneEditDistanceForGovernmentWarningAnchors() = runBlocking {
         val service = VerificationService(
             StaticTextReader(
                 """
                 ABC
                 GOVERNMENT WARNING:
-                (1) According to the Surgeon General, women should not drink alcoholic beverages
-                during pregnancy because of the risk of birth defects.
-                (2) Consumption of alcoholic beverages impails your ability to drive a car or operate
-                machinery, and may cause health problems.
+                (1) According to the Surgeon Genera, women should not drink alcoholic beverages
+                during pregnancy because of the bisk of births defect.
+                (2) Consumption of alcoholic beverages impails your ability to drives a car or operate
+                machinery, and may cause healt problem.
                 """.trimIndent(),
             ),
         )

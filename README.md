@@ -19,7 +19,7 @@ Ordinary text fields are checked with several match modes:
 
 Numeric fields such as alcohol content and net contents use normalized numeric parsing.
 
-The required government warning is intentionally stricter than ordinary fields. `GOVERNMENT WARNING:` must be confirmed from an OCR source in raw uppercase form, with the existing close split allowance for `GOVERNMENT` and `WARNING:`. The rest of the warning statement is checked with normalized token evidence and required anchor words aggregated across the OCR ensemble. The `impairs` anchor also accepts the OCR-only variant `impails`. Boldness, type size, placement, and contrast are outside v1 OCR scope and are not reported as a separate verification field.
+The required government warning is intentionally stricter than ordinary fields. `GOVERNMENT WARNING:` must be confirmed from an OCR source in raw uppercase form, with the existing close split allowance for `GOVERNMENT` and `WARNING:`. The rest of the warning statement is checked with normalized token evidence and required anchor words aggregated across the OCR ensemble. Warning anchors accept whole-token OCR matches with edit distance up to one character. Boldness, type size, placement, and contrast are outside v1 OCR scope and are not reported as a separate verification field.
 
 ## Requirements
 

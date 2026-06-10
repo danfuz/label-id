@@ -234,11 +234,14 @@ class VerificationService(
         }
 
         val hasHeading = headingSources.isNotEmpty()
-        val foundAnchors = GovernmentWarning.ANCHOR_TOKEN_VARIANTS.filter { (_, variants) ->
-            variants.any { variant ->
-                textSources.any { source -> TextNormalizer.containsLoose(source.text, variant) }
-            }
-        }.keys.toList()
+        val actualAnchorTokens = textSources
+            .flatMap { TextNormalizer.tokens(it.text) }
+            .map(TextNormalizer::compact)
+            .filter { it.isNotBlank() }
+            .toSet()
+        val foundAnchors = GovernmentWarning.ANCHOR_TOKENS.filter { anchor ->
+            actualAnchorTokens.any { actualToken -> GovernmentWarning.matchesAnchor(anchor, actualToken) }
+        }
         val expectedTokens = TextNormalizer.tokens(GovernmentWarning.TEXT).distinct()
         val actualTokens = textSources.flatMap { TextNormalizer.tokens(it.text) }.toSet()
         val coverage = expectedTokens.count { it in actualTokens }.toDouble() / expectedTokens.size
@@ -366,19 +369,19 @@ object GovernmentWarning {
     const val REQUIRED_HEADING = "GOVERNMENT WARNING:"
     const val TEXT =
         "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems."
-    val ANCHOR_TOKEN_VARIANTS = linkedMapOf(
-        "surgeon" to listOf("surgeon"),
-        "general" to listOf("general"),
-        "impairs" to listOf("impairs", "impails"),
-        "drive" to listOf("drive"),
-        "risk" to listOf("risk"),
-        "birth" to listOf("birth"),
-        "defects" to listOf("defects"),
-        "health" to listOf("health"),
-        "problems" to listOf("problems"),
+    val ANCHOR_TOKENS = listOf(
+        "surgeon",
+        "general",
+        "impairs",
+        "drive",
+        "risk",
+        "birth",
+        "defects",
+        "health",
+        "problems",
     )
-    val ANCHOR_TOKENS = ANCHOR_TOKEN_VARIANTS.keys.toList()
     val REVIEW_ANCHOR_THRESHOLD = (ANCHOR_TOKENS.size * 2 + 2) / 3
+    private const val MAX_ANCHOR_EDIT_DISTANCE = 1
 
     fun hasExactHeading(actualText: String): Boolean {
         if (Regex("""\bGOVERNMENT\s+WARNING\s*:""").containsMatchIn(actualText)) {
@@ -399,4 +402,37 @@ object GovernmentWarning {
     }
 
     private const val MAX_INTERVENING_HEADING_TOKENS = 1
+
+    fun matchesAnchor(anchor: String, actualToken: String): Boolean =
+        boundedEditDistance(anchor, actualToken, MAX_ANCHOR_EDIT_DISTANCE) <= MAX_ANCHOR_EDIT_DISTANCE
+
+    private fun boundedEditDistance(left: String, right: String, maxDistance: Int): Int {
+        if (kotlin.math.abs(left.length - right.length) > maxDistance) return maxDistance + 1
+        if (left == right) return 0
+
+        var previous = IntArray(right.length + 1) { it }
+        var current = IntArray(right.length + 1)
+
+        for (leftIndex in left.indices) {
+            current[0] = leftIndex + 1
+            var rowMin = current[0]
+
+            for (rightIndex in right.indices) {
+                val insertCost = current[rightIndex] + 1
+                val deleteCost = previous[rightIndex + 1] + 1
+                val replaceCost = previous[rightIndex] + if (left[leftIndex] == right[rightIndex]) 0 else 1
+                val cost = minOf(insertCost, deleteCost, replaceCost)
+                current[rightIndex + 1] = cost
+                rowMin = minOf(rowMin, cost)
+            }
+
+            if (rowMin > maxDistance) return maxDistance + 1
+
+            val swap = previous
+            previous = current
+            current = swap
+        }
+
+        return previous[right.length]
+    }
 }
