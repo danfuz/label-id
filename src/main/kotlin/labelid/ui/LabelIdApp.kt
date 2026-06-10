@@ -3,6 +3,7 @@ package labelid.ui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,7 +27,6 @@ import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Surface
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,7 +34,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draganddrop.DragAndDropEvent
+import androidx.compose.ui.draganddrop.DragAndDropTarget
+import androidx.compose.ui.draganddrop.DragData
+import androidx.compose.ui.draganddrop.dragData
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -52,25 +57,13 @@ import labelid.verification.VerificationService
 import org.jetbrains.skia.Image as SkiaImage
 import java.awt.FileDialog
 import java.awt.Frame
-import java.awt.Window
-import java.awt.Component
-import java.awt.Container
-import java.awt.datatransfer.DataFlavor
-import java.awt.datatransfer.Transferable
-import java.awt.dnd.DnDConstants
-import java.awt.dnd.DropTarget
-import java.awt.dnd.DropTargetAdapter
-import java.awt.dnd.DropTargetDragEvent
-import java.awt.dnd.DropTargetDropEvent
-import java.awt.dnd.DropTargetEvent
-import java.io.File
 import java.io.FilenameFilter
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 
 @Composable
-fun LabelIdApp(window: Window? = null) {
+fun LabelIdApp() {
     val service = remember { VerificationService(EnsembleImageTextReader()) }
 
     var selectedImage by remember { mutableStateOf<Path?>(null) }
@@ -85,17 +78,43 @@ fun LabelIdApp(window: Window? = null) {
         report = null
         error = null
     }
+    val currentSelectImage = rememberUpdatedState { path: Path -> selectImage(path) }
+    val currentOnActiveChange = rememberUpdatedState { active: Boolean -> isDropTargetActive = active }
+    val imageDropTarget = remember {
+        object : DragAndDropTarget {
+            override fun onEntered(event: DragAndDropEvent) {
+                currentOnActiveChange.value(event.hasPotentialImageDropData())
+            }
 
-    WindowFileDropTarget(
-        window = window,
-        onActiveChange = { isDropTargetActive = it },
-        onImageDropped = ::selectImage,
-    )
+            override fun onMoved(event: DragAndDropEvent) {
+                currentOnActiveChange.value(event.hasPotentialImageDropData())
+            }
+
+            override fun onExited(event: DragAndDropEvent) {
+                currentOnActiveChange.value(false)
+            }
+
+            override fun onEnded(event: DragAndDropEvent) {
+                currentOnActiveChange.value(false)
+            }
+
+            override fun onDrop(event: DragAndDropEvent): Boolean {
+                currentOnActiveChange.value(false)
+                val droppedImage = event.droppedImagePath() ?: return false
+                currentSelectImage.value(droppedImage)
+                return true
+            }
+        }
+    }
 
     MaterialTheme {
         Surface(
             modifier = Modifier
-                .fillMaxSize(),
+                .fillMaxSize()
+                .dragAndDropTarget(
+                    shouldStartDragAndDrop = { event -> event.hasPotentialImageDropData() },
+                    target = imageDropTarget,
+                ),
             color = Color(0xFFF7F7F4),
         ) {
             Row(
@@ -389,145 +408,39 @@ private fun pickImagePath(): Path? {
     return dialog.files.firstOrNull()?.toPath()
 }
 
-@Composable
-private fun WindowFileDropTarget(
-    window: Window?,
-    onActiveChange: (Boolean) -> Unit,
-    onImageDropped: (Path) -> Unit,
-) {
-    val currentOnActiveChange by rememberUpdatedState(onActiveChange)
-    val currentOnImageDropped by rememberUpdatedState(onImageDropped)
-
-    DisposableEffect(window) {
-        if (window == null) {
-            return@DisposableEffect onDispose { }
-        }
-
-        val listener = object : DropTargetAdapter() {
-            override fun dragEnter(event: DropTargetDragEvent) {
-                acceptOrRejectDrag(event)
-            }
-
-            override fun dragOver(event: DropTargetDragEvent) {
-                acceptOrRejectDrag(event)
-            }
-
-            override fun dragExit(event: DropTargetEvent) {
-                currentOnActiveChange(false)
-            }
-
-            override fun drop(event: DropTargetDropEvent) {
-                currentOnActiveChange(false)
-                if (!event.hasFileDropData()) {
-                    event.rejectDrop()
-                    return
-                }
-
-                event.acceptDrop(DnDConstants.ACTION_COPY)
-                val droppedImage = event.transferable.droppedImagePath()
-                if (droppedImage == null) {
-                    event.dropComplete(false)
-                    return
-                }
-
-                currentOnImageDropped(droppedImage)
-                event.dropComplete(true)
-            }
-
-            private fun acceptOrRejectDrag(event: DropTargetDragEvent) {
-                if (event.hasFileDropData()) {
-                    currentOnActiveChange(true)
-                    event.acceptDrag(DnDConstants.ACTION_COPY)
-                } else {
-                    currentOnActiveChange(false)
-                    event.rejectDrag()
-                }
-            }
-        }
-
-        val installedTargets = window.dropTargetComponents().map { component ->
-            InstalledDropTarget(
-                component = component,
-                previousDropTarget = component.dropTarget,
-                dropTarget = DropTarget(component, DnDConstants.ACTION_COPY, listener, true),
-            )
-        }
-
-        onDispose {
-            installedTargets.forEach { target ->
-                if (target.component.dropTarget === target.dropTarget) {
-                    target.component.dropTarget = target.previousDropTarget
-                }
-            }
-            currentOnActiveChange(false)
-        }
-    }
-}
-
-private fun DropTargetDragEvent.hasFileDropData(): Boolean =
-    currentDataFlavors.any(::isSupportedDropFlavor)
-
-private fun DropTargetDropEvent.hasFileDropData(): Boolean =
-    currentDataFlavors.any(::isSupportedDropFlavor)
-
-private fun Transferable.droppedImagePath(): Path? =
+private fun DragAndDropEvent.droppedImagePath(): Path? =
     droppedFilePaths().firstOrNull(::isSupportedImagePath)
 
-private fun Transferable.droppedFilePaths(): List<Path> {
-    fileListPaths().takeIf { it.isNotEmpty() }?.let { return it }
-    uriListPaths().takeIf { it.isNotEmpty() }?.let { return it }
-    stringPaths().takeIf { it.isNotEmpty() }?.let { return it }
-    return emptyList()
-}
-
-private fun Transferable.fileListPaths(): List<Path> {
-    if (!isDataFlavorSupported(DataFlavor.javaFileListFlavor)) return emptyList()
-    return runCatching {
-        val files = getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
-        files.orEmpty().mapNotNull { (it as? File)?.toPath() }
-    }.getOrDefault(emptyList())
-}
-
-private fun Transferable.uriListPaths(): List<Path> {
-    if (!isDataFlavorSupported(uriListFlavor)) return emptyList()
-    return runCatching {
-        val uriList = getTransferData(uriListFlavor) as? String
-        uriList.orEmpty().lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() && !it.startsWith("#") }
-            .mapNotNull { value -> runCatching { Path.of(URI(value)) }.getOrNull() }
-            .toList()
-    }.getOrDefault(emptyList())
-}
-
-private fun Transferable.stringPaths(): List<Path> {
-    if (!isDataFlavorSupported(DataFlavor.stringFlavor)) return emptyList()
-    return runCatching {
-        val value = getTransferData(DataFlavor.stringFlavor) as? String
-        value.orEmpty().lineSequence()
-            .map { it.trim().trim('"') }
-            .filter { it.isNotBlank() }
-            .mapNotNull { pathText -> runCatching { Path.of(pathText) }.getOrNull() }
-            .toList()
-    }.getOrDefault(emptyList())
-}
-
-private fun Window.dropTargetComponents(): List<Component> =
-    buildList {
-        fun visit(component: Component) {
-            add(component)
-            if (component is Container) {
-                component.components.forEach(::visit)
-            }
+@OptIn(ExperimentalComposeUiApi::class)
+private fun DragAndDropEvent.hasPotentialImageDropData(): Boolean =
+    runCatching {
+        when (val data = dragData()) {
+            is DragData.FilesList -> true
+            is DragData.Text -> data.bestMimeType.contains("uri-list", ignoreCase = true)
+            else -> false
         }
+    }.getOrDefault(false)
 
-        visit(this@dropTargetComponents)
-    }
+@OptIn(ExperimentalComposeUiApi::class)
+private fun DragAndDropEvent.droppedFilePaths(): List<Path> =
+    runCatching {
+        when (val data = dragData()) {
+            is DragData.FilesList -> data.readFiles().mapNotNull(::pathFromDroppedValue)
+            is DragData.Text -> data.readText().lineSequence().mapNotNull(::pathFromDroppedValue).toList()
+            else -> emptyList()
+        }
+    }.getOrDefault(emptyList())
 
-private fun isSupportedDropFlavor(flavor: DataFlavor): Boolean =
-    flavor == DataFlavor.javaFileListFlavor ||
-        flavor == uriListFlavor ||
-        flavor == DataFlavor.stringFlavor
+private fun pathFromDroppedValue(value: String): Path? {
+    val cleanValue = value.trim().trim('"')
+    if (cleanValue.isBlank() || cleanValue.startsWith("#")) return null
+
+    return runCatching {
+        if (cleanValue.startsWith("file:", ignoreCase = true)) Path.of(URI(cleanValue)) else Path.of(cleanValue)
+    }.getOrNull() ?: runCatching {
+        Path.of(URI(cleanValue))
+    }.getOrNull()
+}
 
 private fun isSupportedImagePath(path: Path): Boolean =
     isSupportedImageName(path.fileName?.toString().orEmpty())
@@ -546,11 +459,3 @@ private fun loadImageBitmap(path: Path): ImageBitmap? =
     runCatching {
         SkiaImage.makeFromEncoded(Files.readAllBytes(path)).toComposeImageBitmap()
     }.getOrNull()
-
-private data class InstalledDropTarget(
-    val component: Component,
-    val previousDropTarget: DropTarget?,
-    val dropTarget: DropTarget,
-)
-
-private val uriListFlavor = DataFlavor("text/uri-list;class=java.lang.String")

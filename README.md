@@ -19,7 +19,7 @@ Ordinary text fields are checked with several match modes:
 
 Numeric fields such as alcohol content and net contents use normalized numeric parsing.
 
-The required government warning is intentionally stricter than ordinary fields. `GOVERNMENT WARNING:` must be confirmed from an OCR source in raw uppercase form, with the existing close split allowance for `GOVERNMENT` and `WARNING:`. The rest of the warning statement is checked with normalized token evidence and required anchor words aggregated across the OCR ensemble. Boldness, type size, placement, and contrast are outside v1 OCR scope and are not reported as a separate verification field.
+The required government warning is intentionally stricter than ordinary fields. `GOVERNMENT WARNING:` must be confirmed from an OCR source in raw uppercase form, with the existing close split allowance for `GOVERNMENT` and `WARNING:`. The rest of the warning statement is checked with normalized token evidence and required anchor words aggregated across the OCR ensemble. The `impairs` anchor also accepts the OCR-only variant `impails`. Boldness, type size, placement, and contrast are outside v1 OCR scope and are not reported as a separate verification field.
 
 ## Requirements
 
@@ -48,7 +48,7 @@ export LABEL_ID_PADDLEOCR_CACHE_HOME=/tmp/label-id-paddlex-cache
 ./gradlew run
 ```
 
-The app opens a desktop window. Choose one label image, paste COLA/application text, and select **Verify Label**.
+The app opens a desktop window. Choose one label image, or drag an image onto the app window, paste COLA/application text, and select **Verify Label**.
 
 ## Test
 

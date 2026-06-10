@@ -477,6 +477,31 @@ class VerificationServiceTest {
     }
 
     @Test
+    fun acceptsImpailsAsGovernmentWarningImpairsAnchorOnly() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                ABC
+                GOVERNMENT WARNING:
+                (1) According to the Surgeon General, women should not drink alcoholic beverages
+                during pregnancy because of the risk of birth defects.
+                (2) Consumption of alcoholic beverages impails your ability to drive a car or operate
+                machinery, and may cause health problems.
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.PASS, report.governmentWarningCheck().status)
+        assertTrue(report.governmentWarningCheck().observed.orEmpty().contains("9/9 anchors"))
+        assertEquals(VerificationStatus.PASS, report.status)
+    }
+
+    @Test
     fun passesGovernmentWarningUsingBestEnsembleSource() = runBlocking {
         val service = VerificationService(
             StaticImageTextReader(

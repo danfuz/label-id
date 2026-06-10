@@ -234,9 +234,11 @@ class VerificationService(
         }
 
         val hasHeading = headingSources.isNotEmpty()
-        val foundAnchors = GovernmentWarning.ANCHOR_TOKENS.filter { token ->
-            textSources.any { source -> TextNormalizer.containsLoose(source.text, token) }
-        }
+        val foundAnchors = GovernmentWarning.ANCHOR_TOKEN_VARIANTS.filter { (_, variants) ->
+            variants.any { variant ->
+                textSources.any { source -> TextNormalizer.containsLoose(source.text, variant) }
+            }
+        }.keys.toList()
         val expectedTokens = TextNormalizer.tokens(GovernmentWarning.TEXT).distinct()
         val actualTokens = textSources.flatMap { TextNormalizer.tokens(it.text) }.toSet()
         val coverage = expectedTokens.count { it in actualTokens }.toDouble() / expectedTokens.size
@@ -364,17 +366,18 @@ object GovernmentWarning {
     const val REQUIRED_HEADING = "GOVERNMENT WARNING:"
     const val TEXT =
         "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems."
-    val ANCHOR_TOKENS = listOf(
-        "surgeon",
-        "general",
-        "impairs",
-        "drive",
-        "risk",
-        "birth",
-        "defects",
-        "health",
-        "problems",
+    val ANCHOR_TOKEN_VARIANTS = linkedMapOf(
+        "surgeon" to listOf("surgeon"),
+        "general" to listOf("general"),
+        "impairs" to listOf("impairs", "impails"),
+        "drive" to listOf("drive"),
+        "risk" to listOf("risk"),
+        "birth" to listOf("birth"),
+        "defects" to listOf("defects"),
+        "health" to listOf("health"),
+        "problems" to listOf("problems"),
     )
+    val ANCHOR_TOKENS = ANCHOR_TOKEN_VARIANTS.keys.toList()
     val REVIEW_ANCHOR_THRESHOLD = (ANCHOR_TOKENS.size * 2 + 2) / 3
 
     fun hasExactHeading(actualText: String): Boolean {
