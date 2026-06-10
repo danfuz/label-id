@@ -40,6 +40,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import labelid.debug
 import labelid.domain.CheckStatus
 import labelid.domain.FieldCheck
 import labelid.domain.ImageInput
@@ -231,21 +232,23 @@ private fun VerificationResults(report: VerificationReport) {
         }
     }
 
-    Divider(Modifier.padding(vertical = 6.dp))
-
-    CopyableTextPanel(
-        title = "OCR Text",
-        value = report.imageText.text.ifBlank { "No text returned." },
-        height = 220,
-    )
-
-    if (report.imageText.diagnostics.isNotEmpty()) {
+    if (debug) {
         Divider(Modifier.padding(vertical = 6.dp))
+
         CopyableTextPanel(
-            title = "OCR Diagnostics",
-            value = report.imageText.diagnostics.joinToString(separator = "\n"),
-            height = 160,
+            title = "OCR Text",
+            value = report.imageText.text.ifBlank { "No text returned." },
+            height = 220,
         )
+
+        if (report.imageText.diagnostics.isNotEmpty()) {
+            Divider(Modifier.padding(vertical = 6.dp))
+            CopyableTextPanel(
+                title = "OCR Diagnostics",
+                value = report.imageText.diagnostics.joinToString(separator = "\n"),
+                height = 160,
+            )
+        }
     }
 }
 
