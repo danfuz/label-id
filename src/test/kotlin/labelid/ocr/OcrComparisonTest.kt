@@ -42,7 +42,7 @@ class OcrComparisonTest {
                 add(tesseractRun("Tesseract psm 11", fixtureImage, pageSegmentationMode = 11))
                 add(tesseractRun("Tesseract psm 12", fixtureImage, pageSegmentationMode = 12))
                 add(tesseractRun("Tesseract 3x upscale psm 11", scaledImage, pageSegmentationMode = 11))
-                addAll(runPaddleOcrCandidates(fixtureImage))
+                add(rapidOcrRun(fixtureImage))
             }.map { result ->
                 result.withVerification(rawColaText, expectedFields)
             }
@@ -97,106 +97,17 @@ class OcrComparisonTest {
         )
     }
 
-    private fun runPaddleOcrCandidates(image: Path): List<OcrRunResult> {
-        val customCommand = System.getenv("LABEL_ID_PADDLEOCR_COMMAND")?.trim().orEmpty()
-        val pythonExecutable = System.getenv("LABEL_ID_PADDLEOCR_PYTHON")?.trim().orEmpty()
-        val cacheHome = System.getenv("LABEL_ID_PADDLEOCR_CACHE_HOME")?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?: Path.of("build", "paddleocr-cache").toAbsolutePath().toString()
-
-        val candidates = when {
-            customCommand.isNotBlank() -> listOf(
-                OcrCommand(
-                    name = "PaddleOCR custom command",
-                    command = shellCommand(customCommand.replace("{image}", image.absolutePathString())),
-                    environment = mapOf("PADDLE_PDX_CACHE_HOME" to cacheHome),
-                ),
-            )
-
-            pythonExecutable.isNotBlank() -> listOf(
-                paddlePythonCommand(
-                    name = "PaddleOCR no preprocessing",
-                    pythonExecutable = pythonExecutable,
-                    image = image,
-                    cacheHome = cacheHome,
-                    useDocOrientationClassify = false,
-                    useDocUnwarping = false,
-                    useTextlineOrientation = false,
-                ),
-                paddlePythonCommand(
-                    name = "PaddleOCR textline orientation",
-                    pythonExecutable = pythonExecutable,
-                    image = image,
-                    cacheHome = cacheHome,
-                    useDocOrientationClassify = false,
-                    useDocUnwarping = false,
-                    useTextlineOrientation = true,
-                ),
-                paddlePythonCommand(
-                    name = "PaddleOCR doc preprocessing",
-                    pythonExecutable = pythonExecutable,
-                    image = image,
-                    cacheHome = cacheHome,
-                    useDocOrientationClassify = true,
-                    useDocUnwarping = true,
-                    useTextlineOrientation = true,
-                ),
-            )
-
-            else -> listOf(
-                OcrCommand(
-                    name = "PaddleOCR default CLI",
-                    command = listOf(
-                        "paddleocr",
-                        "ocr",
-                        "-i",
-                        image.absolutePathString(),
-                        "--use_doc_orientation_classify",
-                        "False",
-                        "--use_doc_unwarping",
-                        "False",
-                        "--use_textline_orientation",
-                        "False",
-                        "--engine",
-                        "paddle",
-                    ),
-                    environment = mapOf("PADDLE_PDX_CACHE_HOME" to cacheHome),
-                ),
-            )
-        }
-
-        return candidates.map { candidate ->
-            runCommand(
-                name = candidate.name,
-                command = candidate.command,
-                environmentOverrides = candidate.environment,
-                timeout = Duration.ofMinutes(5),
-                textExtractor = ::extractPaddleText,
-            )
-        }
-    }
-
-    private fun paddlePythonCommand(
-        name: String,
-        pythonExecutable: String,
-        image: Path,
-        cacheHome: String,
-        useDocOrientationClassify: Boolean,
-        useDocUnwarping: Boolean,
-        useTextlineOrientation: Boolean,
-    ): OcrCommand =
-        OcrCommand(
-            name = name,
+    private fun rapidOcrRun(image: Path): OcrRunResult =
+        runCommand(
+            name = "RapidOCR PP-OCRv5",
             command = listOf(
-                pythonExecutable,
+                RapidOcrImageTextReader.defaultPythonExecutable(),
                 "-c",
-                paddleOcrPythonScript,
+                RapidOcrImageTextReader.rapidOcrScriptForTesting(),
                 image.absolutePathString(),
-                useDocOrientationClassify.toString(),
-                useDocUnwarping.toString(),
-                useTextlineOrientation.toString(),
             ),
-            environment = mapOf("PADDLE_PDX_CACHE_HOME" to cacheHome),
+            timeout = RapidOcrImageTextReader.defaultTimeout(),
+            textExtractor = RapidOcrImageTextReader::extractRapidOcrText,
         )
 
     private fun runCommand(
@@ -353,13 +264,11 @@ class OcrComparisonTest {
                 }
                 appendLine()
             }
-            appendLine("## PaddleOCR Notes")
+            appendLine("## RapidOCR Notes")
             appendLine()
             appendLine(
-                "Set `LABEL_ID_PADDLEOCR_PYTHON` to a Python executable with `paddleocr` installed to use the " +
-                    "PaddleOCR Python API. To compare a different wrapper script instead, set " +
-                    "`LABEL_ID_PADDLEOCR_COMMAND` with `{image}` where the image path should be inserted. " +
-                    "`LABEL_ID_PADDLEOCR_CACHE_HOME` controls the PaddleX model/cache directory.",
+                "Set `LABEL_ID_RAPIDOCR_PYTHON` to a Python executable with `rapidocr` and `onnxruntime` " +
+                    "installed. `LABEL_ID_RAPIDOCR_TIMEOUT_SECONDS` controls the RapidOCR timeout.",
             )
         }
 
@@ -399,16 +308,6 @@ class OcrComparisonTest {
             }
         }
 
-    private fun extractPaddleText(output: String): String =
-        PaddleOcrImageTextReader.extractPaddleText(output)
-
-    private fun shellCommand(command: String): List<String> =
-        if (System.getProperty("os.name").lowercase().contains("windows")) {
-            listOf("cmd.exe", "/c", command)
-        } else {
-            listOf("sh", "-lc", command)
-        }
-
     private fun VerificationReport.count(status: CheckStatus): Int =
         checks.count { it.status == status }
 
@@ -423,12 +322,6 @@ class OcrComparisonTest {
 
     private fun elapsedMillisSince(startedAt: Long): Long =
         (System.nanoTime() - startedAt) / 1_000_000
-
-    private data class OcrCommand(
-        val name: String,
-        val command: List<String>,
-        val environment: Map<String, String> = emptyMap(),
-    )
 
     private class StaticTextReader(
         private val text: String,
@@ -459,20 +352,5 @@ class OcrComparisonTest {
     private companion object {
         private val fixtureImage = Path.of("test", "abc-single-barrel-straight-rye-whisky.jpg")
         private val fixtureColaText = Path.of("test", "abc-single-barrel-straight-rye-whisky-cola.txt")
-        private val paddleOcrPythonScript = """
-            import sys
-            from paddleocr import PaddleOCR
-
-            def to_bool(value):
-                return value.lower() == "true"
-
-            ocr = PaddleOCR(
-                use_doc_orientation_classify=to_bool(sys.argv[2]),
-                use_doc_unwarping=to_bool(sys.argv[3]),
-                use_textline_orientation=to_bool(sys.argv[4]),
-            )
-            for result in ocr.predict(sys.argv[1]):
-                result.print()
-        """.trimIndent()
     }
 }

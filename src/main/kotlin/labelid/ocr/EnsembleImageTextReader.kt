@@ -26,6 +26,44 @@ class EnsembleImageTextReader(
 
         val successes = attempts.filterIsInstance<OcrAttempt.Success>().map { it.imageText }
         val failures = attempts.filterIsInstance<OcrAttempt.Failure>()
+        combineAttempts(successes, failures)
+    }
+
+    suspend fun readImageSequentially(
+        image: ImageInput,
+        shouldStop: (ImageText) -> Boolean,
+    ): ImageText {
+        val successes = mutableListOf<ImageText>()
+        val failures = mutableListOf<OcrAttempt.Failure>()
+
+        for (reader in readers) {
+            val attempt = runCatching {
+                reader.readImage(image)
+            }.fold(
+                onSuccess = { OcrAttempt.Success(it) },
+                onFailure = { OcrAttempt.Failure(reader.name, it.message ?: it::class.simpleName.orEmpty()) },
+            )
+
+            when (attempt) {
+                is OcrAttempt.Success -> successes.add(attempt.imageText)
+                is OcrAttempt.Failure -> failures.add(attempt)
+            }
+
+            if (successes.isNotEmpty()) {
+                val combined = combineAttempts(successes, failures)
+                if (shouldStop(combined)) {
+                    return combined
+                }
+            }
+        }
+
+        return combineAttempts(successes, failures)
+    }
+
+    private fun combineAttempts(
+        successes: List<ImageText>,
+        failures: List<OcrAttempt.Failure>,
+    ): ImageText {
         if (successes.isEmpty()) {
             throw ImageTextReadException(
                 failures.joinToString(
@@ -36,7 +74,7 @@ class EnsembleImageTextReader(
         }
 
         val sources = successes.flatMap { it.sources() }
-        ImageText(
+        return ImageText(
             text = sources.joinToString(separator = "\n\n") { source ->
                 "=== ${source.engine} ===\n${source.text}"
             },

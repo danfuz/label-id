@@ -6,6 +6,7 @@ import labelid.domain.ImageInput
 import labelid.domain.ImageText
 import labelid.domain.ImageTextSource
 import labelid.domain.VerificationStatus
+import labelid.ocr.EnsembleImageTextReader
 import labelid.ocr.ImageTextReader
 import java.nio.file.Path
 import kotlin.test.Test
@@ -77,7 +78,7 @@ class VerificationServiceTest {
                             750 mL
                             ${GovernmentWarning.TEXT}
                             """.trimIndent(),
-                            engine = "paddleocr",
+                            engine = "rapidocr-ppocrv5",
                         ),
                         ImageTextSource(
                             text = """
@@ -103,7 +104,59 @@ class VerificationServiceTest {
 
         assertEquals(VerificationStatus.PASS, report.status)
         assertTrue(report.fieldCheck("Brand Name").observed.orEmpty().contains("tesseract-psm-11"))
-        assertTrue(report.fieldCheck("Net Contents").observed.orEmpty().contains("paddleocr"))
+        assertTrue(report.fieldCheck("Net Contents").observed.orEmpty().contains("rapidocr-ppocrv5"))
+    }
+
+    @Test
+    fun stopsEnsembleBeforeRapidOcrWhenTesseractAlreadyPasses() = runBlocking {
+        val tesseractReader = CountingImageTextReader(
+            ImageText(
+                text = """
+                ABC
+                ${GovernmentWarning.TEXT}
+                """.trimIndent(),
+                engine = "tesseract-psm-3",
+            ),
+        )
+        val rapidOcrReader = CountingImageTextReader(
+            ImageText(text = "RAPIDOCR TEXT", engine = "rapidocr-ppocrv5"),
+        )
+        val service = VerificationService(
+            EnsembleImageTextReader(listOf(tesseractReader, rapidOcrReader)),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(VerificationStatus.PASS, report.status)
+        assertEquals(1, tesseractReader.calls)
+        assertEquals(0, rapidOcrReader.calls)
+        assertEquals(listOf("tesseract-psm-3"), report.imageText.sources().map { it.engine })
+    }
+
+    @Test
+    fun keepsReadingEnsembleSourcesUntilVerificationPasses() = runBlocking {
+        val tesseractReader = CountingImageTextReader(
+            ImageText(text = "ABC", engine = "tesseract-psm-3"),
+        )
+        val rapidOcrReader = CountingImageTextReader(
+            ImageText(text = GovernmentWarning.TEXT, engine = "rapidocr-ppocrv5"),
+        )
+        val service = VerificationService(
+            EnsembleImageTextReader(listOf(tesseractReader, rapidOcrReader)),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(VerificationStatus.PASS, report.status)
+        assertEquals(1, tesseractReader.calls)
+        assertEquals(1, rapidOcrReader.calls)
+        assertEquals(listOf("tesseract-psm-3", "rapidocr-ppocrv5"), report.imageText.sources().map { it.engine })
     }
 
     @Test
@@ -518,7 +571,7 @@ class VerificationServiceTest {
                             Consumption of alcoholic beverages impairs your ability to drive a car or operate
                             machinery, and may cause health problems.
                             """.trimIndent(),
-                            engine = "paddleocr",
+                            engine = "rapidocr-ppocrv5",
                         ),
                         ImageTextSource(
                             text = """
@@ -579,7 +632,7 @@ class VerificationServiceTest {
                             ABC
                             GOVERNMENT WARNING:
                             """.trimIndent(),
-                            engine = "paddleocr",
+                            engine = "rapidocr-ppocrv5",
                         ),
                         ImageTextSource(
                             text = """
@@ -625,5 +678,17 @@ class VerificationServiceTest {
     ) : ImageTextReader {
         override suspend fun readImage(image: ImageInput): ImageText =
             imageText
+    }
+
+    private class CountingImageTextReader(
+        private val imageText: ImageText,
+    ) : ImageTextReader {
+        var calls: Int = 0
+            private set
+
+        override suspend fun readImage(image: ImageInput): ImageText {
+            calls += 1
+            return imageText
+        }
     }
 }

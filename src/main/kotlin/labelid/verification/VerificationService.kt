@@ -2,12 +2,15 @@ package labelid.verification
 
 import labelid.domain.CheckStatus
 import labelid.domain.ExpectedField
+import labelid.domain.ExpectedLabelData
 import labelid.domain.FieldCheck
 import labelid.domain.FieldKind
 import labelid.domain.ImageInput
+import labelid.domain.ImageText
 import labelid.domain.ImageTextSource
 import labelid.domain.VerificationReport
 import labelid.domain.VerificationStatus
+import labelid.ocr.EnsembleImageTextReader
 import labelid.ocr.ImageTextReader
 import labelid.parsing.ApplicationTextParser
 import java.util.Locale
@@ -19,9 +22,35 @@ class VerificationService(
     suspend fun verify(image: ImageInput, rawApplicationText: String): VerificationReport {
         val startedAt = System.nanoTime()
         val expected = parser.parse(rawApplicationText)
-        val imageText = reader.readImage(image)
-        val textSources = imageText.sources()
-        val checks = buildList {
+        val imageText = readImageForVerification(image, expected)
+        val checks = buildChecks(expected, imageText.sources())
+
+        return VerificationReport(
+            status = summarize(checks),
+            expected = expected,
+            imageText = imageText,
+            checks = checks,
+            elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000,
+        )
+    }
+
+    private suspend fun readImageForVerification(
+        image: ImageInput,
+        expected: ExpectedLabelData,
+    ): ImageText =
+        if (reader is EnsembleImageTextReader) {
+            reader.readImageSequentially(image) { candidateImageText ->
+                summarize(buildChecks(expected, candidateImageText.sources())) == VerificationStatus.PASS
+            }
+        } else {
+            reader.readImage(image)
+        }
+
+    private fun buildChecks(
+        expected: ExpectedLabelData,
+        textSources: List<ImageTextSource>,
+    ): List<FieldCheck> =
+        buildList {
             if (!expected.hasComparableFields()) {
                 add(
                     FieldCheck(
@@ -40,15 +69,6 @@ class VerificationService(
 
             add(checkGovernmentWarning(textSources))
         }
-
-        return VerificationReport(
-            status = summarize(checks),
-            expected = expected,
-            imageText = imageText,
-            checks = checks,
-            elapsedMillis = (System.nanoTime() - startedAt) / 1_000_000,
-        )
-    }
 
     private fun checkField(field: ExpectedField, textSources: List<ImageTextSource>): FieldCheck =
         bestSourceCheck(
