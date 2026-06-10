@@ -53,10 +53,12 @@ import labelid.ocr.EnsembleImageTextReader
 import labelid.verification.VerificationService
 import org.jetbrains.skia.Image as SkiaImage
 import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
 import java.io.FilenameFilter
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -108,7 +110,7 @@ fun LabelIdApp() {
             modifier = Modifier
                 .fillMaxSize()
                 .dragAndDropTarget(
-                    shouldStartDragAndDrop = { event -> event.droppedImagePath() != null },
+                    shouldStartDragAndDrop = { event -> event.hasFileDropData() },
                     target = imageDropTarget,
                 ),
             color = Color(0xFFF7F7F4),
@@ -379,13 +381,51 @@ private fun DragAndDropEvent.droppedImagePath(): Path? =
     droppedFilePaths().firstOrNull(::isSupportedImagePath)
 
 @OptIn(ExperimentalComposeUiApi::class)
+private fun DragAndDropEvent.hasFileDropData(): Boolean {
+    val transferable = awtTransferable
+    return transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor) ||
+        transferable.isDataFlavorSupported(uriListFlavor) ||
+        transferable.isDataFlavorSupported(DataFlavor.stringFlavor)
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
 private fun DragAndDropEvent.droppedFilePaths(): List<Path> {
     val transferable = awtTransferable
-    if (!transferable.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) return emptyList()
+    transferable.fileListPaths().takeIf { it.isNotEmpty() }?.let { return it }
+    transferable.uriListPaths().takeIf { it.isNotEmpty() }?.let { return it }
+    transferable.stringPaths().takeIf { it.isNotEmpty() }?.let { return it }
+    return emptyList()
+}
 
+private fun Transferable.fileListPaths(): List<Path> {
+    if (!isDataFlavorSupported(DataFlavor.javaFileListFlavor)) return emptyList()
     return runCatching {
-        val files = transferable.getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
+        val files = getTransferData(DataFlavor.javaFileListFlavor) as? List<*>
         files.orEmpty().mapNotNull { (it as? File)?.toPath() }
+    }.getOrDefault(emptyList())
+}
+
+private fun Transferable.uriListPaths(): List<Path> {
+    if (!isDataFlavorSupported(uriListFlavor)) return emptyList()
+    return runCatching {
+        val uriList = getTransferData(uriListFlavor) as? String
+        uriList.orEmpty().lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() && !it.startsWith("#") }
+            .mapNotNull { value -> runCatching { Path.of(URI(value)) }.getOrNull() }
+            .toList()
+    }.getOrDefault(emptyList())
+}
+
+private fun Transferable.stringPaths(): List<Path> {
+    if (!isDataFlavorSupported(DataFlavor.stringFlavor)) return emptyList()
+    return runCatching {
+        val value = getTransferData(DataFlavor.stringFlavor) as? String
+        value.orEmpty().lineSequence()
+            .map { it.trim().trim('"') }
+            .filter { it.isNotBlank() }
+            .mapNotNull { pathText -> runCatching { Path.of(pathText) }.getOrNull() }
+            .toList()
     }.getOrDefault(emptyList())
 }
 
@@ -406,3 +446,5 @@ private fun loadImageBitmap(path: Path): ImageBitmap? =
     runCatching {
         SkiaImage.makeFromEncoded(Files.readAllBytes(path)).toComposeImageBitmap()
     }.getOrNull()
+
+private val uriListFlavor = DataFlavor("text/uri-list;class=java.lang.String")
