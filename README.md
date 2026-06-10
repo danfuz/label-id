@@ -72,7 +72,7 @@ export LABEL_ID_PADDLEOCR_CACHE_HOME=/tmp/label-id-paddlex-cache
 ./gradlew run
 ```
 
-The app opens a desktop window. Choose one label image, or drag an image onto the app window, paste COLA/application text, and select **Verify Label**.
+The app opens a desktop window. Choose one label image, paste COLA/application text, and select **Verify Label**.
 
 ## Test
 

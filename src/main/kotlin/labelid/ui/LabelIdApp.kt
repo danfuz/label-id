@@ -3,7 +3,6 @@ package labelid.ui
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,15 +30,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draganddrop.DragAndDropEvent
-import androidx.compose.ui.draganddrop.DragAndDropTarget
-import androidx.compose.ui.draganddrop.DragData
-import androidx.compose.ui.draganddrop.dragData
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -58,7 +51,6 @@ import org.jetbrains.skia.Image as SkiaImage
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.FilenameFilter
-import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -71,50 +63,16 @@ fun LabelIdApp() {
     var report by remember { mutableStateOf<VerificationReport?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var isRunning by remember { mutableStateOf(false) }
-    var isDropTargetActive by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     fun selectImage(path: Path) {
         selectedImage = path
         report = null
         error = null
     }
-    val currentSelectImage = rememberUpdatedState { path: Path -> selectImage(path) }
-    val currentOnActiveChange = rememberUpdatedState { active: Boolean -> isDropTargetActive = active }
-    val imageDropTarget = remember {
-        object : DragAndDropTarget {
-            override fun onEntered(event: DragAndDropEvent) {
-                currentOnActiveChange.value(event.hasPotentialImageDropData())
-            }
-
-            override fun onMoved(event: DragAndDropEvent) {
-                currentOnActiveChange.value(event.hasPotentialImageDropData())
-            }
-
-            override fun onExited(event: DragAndDropEvent) {
-                currentOnActiveChange.value(false)
-            }
-
-            override fun onEnded(event: DragAndDropEvent) {
-                currentOnActiveChange.value(false)
-            }
-
-            override fun onDrop(event: DragAndDropEvent): Boolean {
-                currentOnActiveChange.value(false)
-                val droppedImage = event.droppedImagePath() ?: return false
-                currentSelectImage.value(droppedImage)
-                return true
-            }
-        }
-    }
 
     MaterialTheme {
         Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .dragAndDropTarget(
-                    shouldStartDragAndDrop = { event -> event.hasPotentialImageDropData() },
-                    target = imageDropTarget,
-                ),
+            modifier = Modifier.fillMaxSize(),
             color = Color(0xFFF7F7F4),
         ) {
             Row(
@@ -139,7 +97,7 @@ fun LabelIdApp() {
                         },
                     )
 
-                    ImagePreview(selectedImage, isDropTargetActive)
+                    ImagePreview(selectedImage)
 
                     OutlinedTextField(
                         value = applicationText,
@@ -218,22 +176,19 @@ private fun ImagePicker(
 }
 
 @Composable
-private fun ImagePreview(path: Path?, isDropTargetActive: Boolean) {
+private fun ImagePreview(path: Path?) {
     val bitmap = remember(path) { path?.let(::loadImageBitmap) }
-    val borderColor = if (isDropTargetActive) Color(0xFF256F9C) else Color(0xFFD5D8DA)
-    val backgroundColor = if (isDropTargetActive) Color(0xFFEAF5FB) else Color.White
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(230.dp)
-            .background(backgroundColor, RoundedCornerShape(8.dp))
-            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+            .background(Color.White, RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0xFFD5D8DA), RoundedCornerShape(8.dp))
             .padding(8.dp),
         contentAlignment = Alignment.Center,
     ) {
         when {
-            isDropTargetActive -> Text("Drop image", color = Color(0xFF256F9C), fontWeight = FontWeight.SemiBold)
-            path == null -> Text("Choose or drop image", color = Color(0xFF777D82))
+            path == null -> Text("Choose image", color = Color(0xFF777D82))
             bitmap == null -> Text("Preview unavailable", color = Color(0xFF777D82))
             else -> Image(
                 bitmap = bitmap,
@@ -406,40 +361,6 @@ private fun pickImagePath(): Path? {
     }
     dialog.isVisible = true
     return dialog.files.firstOrNull()?.toPath()
-}
-
-private fun DragAndDropEvent.droppedImagePath(): Path? =
-    droppedFilePaths().firstOrNull(::isSupportedImagePath)
-
-@OptIn(ExperimentalComposeUiApi::class)
-private fun DragAndDropEvent.hasPotentialImageDropData(): Boolean =
-    runCatching {
-        when (val data = dragData()) {
-            is DragData.FilesList -> true
-            is DragData.Text -> data.bestMimeType.contains("uri-list", ignoreCase = true)
-            else -> false
-        }
-    }.getOrDefault(false)
-
-@OptIn(ExperimentalComposeUiApi::class)
-private fun DragAndDropEvent.droppedFilePaths(): List<Path> =
-    runCatching {
-        when (val data = dragData()) {
-            is DragData.FilesList -> data.readFiles().mapNotNull(::pathFromDroppedValue)
-            is DragData.Text -> data.readText().lineSequence().mapNotNull(::pathFromDroppedValue).toList()
-            else -> emptyList()
-        }
-    }.getOrDefault(emptyList())
-
-private fun pathFromDroppedValue(value: String): Path? {
-    val cleanValue = value.trim().trim('"')
-    if (cleanValue.isBlank() || cleanValue.startsWith("#")) return null
-
-    return runCatching {
-        if (cleanValue.startsWith("file:", ignoreCase = true)) Path.of(URI(cleanValue)) else Path.of(cleanValue)
-    }.getOrNull() ?: runCatching {
-        Path.of(URI(cleanValue))
-    }.getOrNull()
 }
 
 private fun isSupportedImagePath(path: Path): Boolean =
