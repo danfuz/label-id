@@ -12,6 +12,16 @@ class TextNormalizerTest {
     }
 
     @Test
+    fun rawMatchDoesNotApplyCompatibilityNormalization() {
+        assertFalse(TextNormalizer.containsRaw("NORTH PIER ＳＰIＲIＴＳ", "NORTH PIER SPIRITS"))
+    }
+
+    @Test
+    fun looseMatchAppliesCompatibilityNormalization() {
+        assertTrue(TextNormalizer.containsLoose("NORTH PIER ＳＰIＲIＴＳ", "NORTH PIER SPIRITS"))
+    }
+
+    @Test
     fun compactRemovesPunctuation() {
         assertEquals("45alcvol", TextNormalizer.compact("45% Alc./Vol."))
     }

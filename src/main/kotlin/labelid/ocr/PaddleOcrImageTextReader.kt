@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import labelid.domain.ImageInput
 import labelid.domain.ImageText
+import labelid.domain.ImageTextSource
 import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.TimeUnit
@@ -49,11 +50,13 @@ class PaddleOcrImageTextReader(
         }
 
         val rawOutput = stdout.ifBlank { stderr }
+        val sources = extractPaddleTextSources(rawOutput)
         ImageText(
-            text = extractPaddleText(rawOutput),
+            text = sources.joinToString(separator = "\n\n") { it.text },
             engine = "paddleocr",
             confidence = null,
             diagnostics = listOfNotNull(stderr.takeIf { stdout.isNotBlank() && it.isNotBlank() }),
+            sourceTexts = sources,
         )
     }
 
@@ -63,8 +66,31 @@ class PaddleOcrImageTextReader(
             options = setOf(RegexOption.DOT_MATCHES_ALL),
         )
         private val quotedStringPattern = Regex("""'([^'\\]*(?:\\.[^'\\]*)*)'|"((?:\\.|[^"\\])*)"""")
+        private const val REC_TEXT_MARKER = "__LABEL_ID_PADDLEOCR_REC_TEXT__"
+        private const val SPATIAL_TEXT_MARKER = "__LABEL_ID_PADDLEOCR_SPATIAL_TEXT__"
+
+        fun extractPaddleTextSources(output: String): List<ImageTextSource> {
+            val recText = output.sectionAfterMarker(REC_TEXT_MARKER, SPATIAL_TEXT_MARKER)
+            val spatialText = output.sectionAfterMarker(SPATIAL_TEXT_MARKER)
+            if (recText != null || spatialText != null) {
+                return buildList {
+                    recText?.takeIf { it.isNotBlank() }?.let {
+                        add(ImageTextSource(text = it, engine = "paddleocr"))
+                    }
+                    spatialText
+                        ?.takeIf { it.isNotBlank() && it != recText }
+                        ?.let { add(ImageTextSource(text = it, engine = "paddleocr-spatial")) }
+                }.ifEmpty { listOf(ImageTextSource(text = output.trim(), engine = "paddleocr")) }
+            }
+
+            return listOf(ImageTextSource(text = extractPaddleText(output), engine = "paddleocr"))
+        }
 
         fun extractPaddleText(output: String): String {
+            output.sectionAfterMarker(REC_TEXT_MARKER, SPATIAL_TEXT_MARKER)?.let {
+                return it
+            }
+
             val recTexts = recTextsPattern.find(output)?.groupValues?.get(1)
             if (recTexts.isNullOrBlank()) return output.trim()
 
@@ -84,14 +110,85 @@ class PaddleOcrImageTextReader(
             import sys
             from paddleocr import PaddleOCR
 
+            REC_TEXT_MARKER = "$REC_TEXT_MARKER"
+            SPATIAL_TEXT_MARKER = "$SPATIAL_TEXT_MARKER"
+
+            def box_values(box):
+                return [int(value) for value in box]
+
+            def overlaps_vertically(left, right):
+                overlap = min(left[3], right[3]) - max(left[1], right[1])
+                if overlap <= 0:
+                    return False
+                left_height = max(1, left[3] - left[1])
+                right_height = max(1, right[3] - right[1])
+                return overlap / min(left_height, right_height) >= 0.65
+
+            def same_line(line_rows, candidate):
+                candidate_center_y = (candidate["box"][1] + candidate["box"][3]) / 2
+                average_center_y = sum((row["box"][1] + row["box"][3]) / 2 for row in line_rows) / len(line_rows)
+                median_height = sorted(max(1, row["box"][3] - row["box"][1]) for row in line_rows)[len(line_rows) // 2]
+                close_center = abs(average_center_y - candidate_center_y) <= max(24, min(90, median_height * 0.45))
+                return close_center or any(overlaps_vertically(row["box"], candidate["box"]) for row in line_rows)
+
+            def spatial_lines(texts, boxes):
+                rows = []
+                for text, box in zip(texts, boxes):
+                    clean_text = str(text).strip()
+                    if not clean_text:
+                        continue
+                    values = box_values(box)
+                    rows.append({"text": clean_text, "box": values})
+                lines = []
+                for row in sorted(rows, key=lambda item: (item["box"][1] + item["box"][3]) / 2):
+                    for line in lines:
+                        if same_line(line, row):
+                            line.append(row)
+                            break
+                    else:
+                        lines.append([row])
+                return [
+                    " ".join(row["text"] for row in sorted(line, key=lambda item: item["box"][0]))
+                    for line in sorted(lines, key=lambda line: sum((row["box"][1] + row["box"][3]) / 2 for row in line) / len(line))
+                ]
+
             ocr = PaddleOCR(
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
+                return_word_box=True,
             )
-            for result in ocr.predict(sys.argv[1]):
-                result.print()
+            rec_texts = []
+            spatial_texts = []
+            for result in ocr.predict(sys.argv[1], return_word_box=True):
+                data = result.json["res"]
+                result_texts = data.get("rec_texts") or []
+                rec_texts.extend(str(text) for text in result_texts)
+                result_boxes = data.get("rec_boxes")
+                if result_boxes is None:
+                    result_boxes = []
+                spatial_texts.extend(spatial_lines(result_texts, result_boxes))
+
+            print(REC_TEXT_MARKER)
+            print("\n".join(rec_texts))
+            print(SPATIAL_TEXT_MARKER)
+            print("\n".join(spatial_texts))
         """.trimIndent()
+
+        private fun String.sectionAfterMarker(
+            startMarker: String,
+            endMarker: String? = null,
+        ): String? {
+            val start = indexOf(startMarker)
+            if (start < 0) return null
+
+            val contentStart = start + startMarker.length
+            val contentEnd = endMarker
+                ?.let { indexOf(it, startIndex = contentStart) }
+                ?.takeIf { it >= 0 }
+                ?: length
+            return substring(contentStart, contentEnd).trim()
+        }
 
         private fun String.unescapeQuotedString(): String =
             replace("\\\"", "\"")

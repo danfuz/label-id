@@ -27,4 +27,36 @@ class PaddleOcrImageTextReaderTest {
     fun returnsTrimmedOutputWhenPaddleShapeIsUnknown() {
         assertEquals("plain text", PaddleOcrImageTextReader.extractPaddleText(" plain text "))
     }
+
+    @Test
+    fun extractsRecognitionAndSpatialSourcesFromMarkedOutput() {
+        val output = """
+            __LABEL_ID_PADDLEOCR_REC_TEXT__
+            HILL
+            COPPER
+            DISTILLING
+            __LABEL_ID_PADDLEOCR_SPATIAL_TEXT__
+            COPPER HILL
+            DISTILLING
+        """.trimIndent()
+
+        val sources = PaddleOcrImageTextReader.extractPaddleTextSources(output)
+
+        assertEquals(listOf("paddleocr", "paddleocr-spatial"), sources.map { it.engine })
+        assertEquals(
+            """
+            HILL
+            COPPER
+            DISTILLING
+            """.trimIndent(),
+            sources[0].text,
+        )
+        assertEquals(
+            """
+            COPPER HILL
+            DISTILLING
+            """.trimIndent(),
+            sources[1].text,
+        )
+    }
 }

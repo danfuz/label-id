@@ -6,10 +6,10 @@ object AlcoholContentParser {
     )
 
     fun parseExpected(value: String): Double? =
-        percentPattern.find(value)?.groupValues?.get(1)?.toDoubleOrNull()
+        percentPattern.find(TextNormalizer.normalizeCompatibility(value))?.groupValues?.get(1)?.toDoubleOrNull()
 
     fun parseAll(value: String): List<Double> =
-        percentPattern.findAll(value)
+        percentPattern.findAll(TextNormalizer.normalizeCompatibility(value))
             .mapNotNull { it.groupValues[1].toDoubleOrNull() }
             .toList()
 }
@@ -20,10 +20,10 @@ object NetContentsParser {
     )
 
     fun parseExpected(value: String): Volume? =
-        volumePattern.find(value)?.toVolume()
+        volumePattern.find(TextNormalizer.normalizeCompatibility(value))?.toVolume()
 
     fun parseAll(value: String): List<Volume> =
-        volumePattern.findAll(value)
+        volumePattern.findAll(TextNormalizer.normalizeCompatibility(value))
             .mapNotNull { it.toVolume() }
             .toList()
 

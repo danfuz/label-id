@@ -1,11 +1,22 @@
 package labelid.verification
 
+import java.text.Normalizer
+
 object TextNormalizer {
     private const val SHORT_TEXT_MAX_LINE_SPAN = 8
     private const val SHORT_TEXT_TOKEN_SPAN_MULTIPLIER = 7
 
+    fun normalizeCompatibility(value: String): String =
+        Normalizer.normalize(value, Normalizer.Form.NFKC)
+
+    fun normalizeRaw(value: String): String =
+        value.replace('\u00A0', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
     fun normalizeLoose(value: String): String =
-        value.lowercase()
+        normalizeCompatibility(value)
+            .lowercase()
             .replace('\u2018', '\'')
             .replace('\u2019', '\'')
             .replace('\u201C', '"')
@@ -15,6 +26,12 @@ object TextNormalizer {
             .replace(Regex("[^a-z0-9%./']+"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
+
+    fun containsRaw(haystack: String, needle: String): Boolean {
+        val rawHaystack = normalizeRaw(haystack)
+        val rawNeedle = normalizeRaw(needle)
+        return rawNeedle.isNotBlank() && rawHaystack.contains(rawNeedle)
+    }
 
     fun compact(value: String): String =
         normalizeLoose(value)

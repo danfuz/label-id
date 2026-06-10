@@ -63,30 +63,68 @@ class VerificationService(
         bestSourceCheck(
             fieldName = field.name,
             expected = field.value,
-            checks = textSources.map { source ->
-                checkFieldInText(field, source.text).withSource(source.engine)
+            checks = textSources.flatMap { source ->
+                checkFieldInText(field, source.text).map { candidate ->
+                    candidate.withSource(source.engine)
+                }
             },
             failMessage = "Expected text was not found by any OCR engine.",
         )
 
-    private fun checkFieldInText(field: ExpectedField, actualText: String): FieldCheck =
+    private fun checkFieldInText(field: ExpectedField, actualText: String): List<CheckCandidate> =
         when (field.kind) {
             FieldKind.TEXT -> checkTextField(field, actualText)
-            FieldKind.ALCOHOL_CONTENT -> checkAlcoholContent(field, actualText)
-            FieldKind.NET_CONTENTS -> checkNetContents(field, actualText)
+            FieldKind.ALCOHOL_CONTENT -> listOf(checkAlcoholContent(field, actualText).withMode("numeric"))
+            FieldKind.NET_CONTENTS -> listOf(checkNetContents(field, actualText).withMode("numeric"))
         }
 
-    private fun checkTextField(field: ExpectedField, actualText: String): FieldCheck {
+    private fun checkTextField(field: ExpectedField, actualText: String): List<CheckCandidate> = buildList {
+        add(checkRawTextField(field, actualText).withMode("raw"))
+        add(checkNormalizedTextField(field, actualText).withMode("nfkc-normalized"))
+        add(checkTokenWindowTextField(field, actualText).withMode("token-window"))
+        add(checkSimilarityTextField(field, actualText).withMode("similarity"))
+    }
+
+    private fun checkRawTextField(field: ExpectedField, actualText: String): FieldCheck =
+        if (TextNormalizer.containsRaw(actualText, field.value)) {
+            FieldCheck(
+                fieldName = field.name,
+                expected = field.value,
+                observed = field.value,
+                status = CheckStatus.PASS,
+                message = "Expected text appears on the label without normalization.",
+            )
+        } else {
+            FieldCheck(
+                fieldName = field.name,
+                expected = field.value,
+                observed = null,
+                status = CheckStatus.FAIL,
+                message = "Expected raw text was not found in the OCR output.",
+            )
+        }
+
+    private fun checkNormalizedTextField(field: ExpectedField, actualText: String): FieldCheck {
         if (TextNormalizer.containsLoose(actualText, field.value)) {
             return FieldCheck(
                 fieldName = field.name,
                 expected = field.value,
                 observed = field.value,
                 status = CheckStatus.PASS,
-                message = "Expected text appears on the label.",
+                message = "Expected text appears on the label after safe normalization.",
             )
         }
 
+        return FieldCheck(
+            fieldName = field.name,
+            expected = field.value,
+            observed = null,
+            status = CheckStatus.FAIL,
+            message = "Expected normalized text was not found in the OCR output.",
+        )
+    }
+
+    private fun checkTokenWindowTextField(field: ExpectedField, actualText: String): FieldCheck {
         if (TextNormalizer.containsOrderedTokenWindow(actualText, field.value)) {
             return FieldCheck(
                 fieldName = field.name,
@@ -97,6 +135,16 @@ class VerificationService(
             )
         }
 
+        return FieldCheck(
+            fieldName = field.name,
+            expected = field.value,
+            observed = null,
+            status = CheckStatus.FAIL,
+            message = "Expected words were not found in OCR order with the required locality.",
+        )
+    }
+
+    private fun checkSimilarityTextField(field: ExpectedField, actualText: String): FieldCheck {
         val bestSimilarity = TextNormalizer.bestCompactWindowSimilarity(field.value, actualText)
         return if (bestSimilarity >= 0.92) {
             FieldCheck(
@@ -120,7 +168,7 @@ class VerificationService(
     private fun checkAlcoholContent(field: ExpectedField, actualText: String): FieldCheck {
         val expected = AlcoholContentParser.parseExpected(field.value)
         if (expected == null) {
-            return checkTextField(field, actualText)
+            return bestCandidate(checkTextField(field, actualText))
         }
 
         val observed = AlcoholContentParser.parseAll(actualText)
@@ -147,7 +195,7 @@ class VerificationService(
     private fun checkNetContents(field: ExpectedField, actualText: String): FieldCheck {
         val expected = NetContentsParser.parseExpected(field.value)
         if (expected == null) {
-            return checkTextField(field, actualText)
+            return bestCandidate(checkTextField(field, actualText))
         }
 
         val observed = NetContentsParser.parseAll(actualText)
@@ -171,25 +219,32 @@ class VerificationService(
         }
     }
 
-    private fun checkGovernmentWarning(textSources: List<ImageTextSource>): FieldCheck =
-        bestSourceCheck(
+    private fun checkGovernmentWarning(textSources: List<ImageTextSource>): FieldCheck {
+        val paddleSources = textSources.filter { it.isPaddleOcrSource() }
+        val hasAuthoritativeHeading = paddleSources.any { GovernmentWarning.hasExactHeading(it.text) }
+
+        return bestSourceCheck(
             fieldName = "Government Warning",
             expected = GovernmentWarning.TEXT,
-            checks = textSources.map { source ->
-                checkGovernmentWarningInText(source.text).withSource(source.engine)
+            checks = paddleSources.map { source ->
+                checkGovernmentWarningInText(source.text, hasAuthoritativeHeading).withSource(source.engine)
             },
-            failMessage = "Required government warning statement was not found by any OCR engine.",
+            failMessage = "Required government warning statement was not found by PaddleOCR.",
         )
+    }
 
-    private fun checkGovernmentWarningInText(actualText: String): FieldCheck {
-        val hasHeading = GovernmentWarning.hasExactHeading(actualText)
+    private fun checkGovernmentWarningInText(
+        actualText: String,
+        hasAuthoritativeHeading: Boolean,
+    ): FieldCheck {
+        val hasHeading = hasAuthoritativeHeading
         if (hasHeading && TextNormalizer.containsLoose(actualText, GovernmentWarning.TEXT)) {
             return FieldCheck(
                 fieldName = "Government Warning",
                 expected = GovernmentWarning.TEXT,
                 observed = "Found",
                 status = CheckStatus.PASS,
-                message = "Required warning statement text appears on the label.",
+                message = "Required warning statement text appears on the label with a PaddleOCR-confirmed heading.",
             )
         }
 
@@ -198,7 +253,7 @@ class VerificationService(
         val actualTokens = TextNormalizer.tokens(actualText).toSet()
         val coverage = expectedTokens.count { it in actualTokens }.toDouble() / expectedTokens.size
         val observed = buildList {
-            add(if (hasHeading) "heading found" else "heading missing")
+            add(if (hasHeading) "Paddle heading found" else "Paddle heading missing")
             add("$foundAnchors/${GovernmentWarning.ANCHOR_TOKENS.size} anchors")
             add("${(coverage * 100).toInt()}% token coverage")
         }.joinToString()
@@ -210,7 +265,7 @@ class VerificationService(
         val message = when (status) {
             CheckStatus.PASS -> "Required warning statement is strongly supported by OCR tokens."
             CheckStatus.REVIEW -> "Government warning evidence is partial; review the label image."
-            CheckStatus.FAIL -> "Required government warning statement was not found."
+            CheckStatus.FAIL -> "Required government warning statement was not found with a PaddleOCR-confirmed heading."
             CheckStatus.NOT_ASSESSED -> error("Government warning text check is always assessed.")
         }
 
@@ -247,11 +302,41 @@ class VerificationService(
         }
     }
 
+    private fun bestCandidate(candidates: List<CheckCandidate>): FieldCheck =
+        candidates.map { it.check }
+            .minWith(compareBy<FieldCheck> { it.status.rank }.thenByDescending { it.observed?.length ?: 0 })
+
+    private fun FieldCheck.withMode(mode: String): CheckCandidate =
+        CheckCandidate(check = this, mode = mode)
+
+    private fun CheckCandidate.withSource(engine: String): FieldCheck {
+        val sourceLabel = buildList {
+            add(engine)
+            mode?.let(::add)
+        }.joinToString()
+        return check.copy(
+            observed = check.observed?.let { "$it [$sourceLabel]" },
+            message = buildString {
+                append(check.message)
+                append(" OCR source: ")
+                append(engine)
+                mode?.let {
+                    append(". Match mode: ")
+                    append(it)
+                }
+                append(".")
+            },
+        )
+    }
+
     private fun FieldCheck.withSource(engine: String): FieldCheck =
         copy(
             observed = observed?.let { "$it [$engine]" },
             message = "$message OCR source: $engine.",
         )
+
+    private fun ImageTextSource.isPaddleOcrSource(): Boolean =
+        engine.lowercase(Locale.US).startsWith("paddleocr")
 
     private val CheckStatus.rank: Int
         get() = when (this) {
@@ -270,6 +355,11 @@ class VerificationService(
 
     private fun trimNumber(value: Double): String =
         if (value % 1.0 == 0.0) value.toInt().toString() else "%.2f".format(Locale.US, value).trimEnd('0').trimEnd('.')
+
+    private data class CheckCandidate(
+        val check: FieldCheck,
+        val mode: String? = null,
+    )
 }
 
 object GovernmentWarning {

@@ -10,6 +10,7 @@ import labelid.ocr.ImageTextReader
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VerificationServiceTest {
@@ -103,6 +104,29 @@ class VerificationServiceTest {
         assertEquals(VerificationStatus.PASS, report.status)
         assertTrue(report.fieldCheck("Brand Name").observed.orEmpty().contains("tesseract-psm-11"))
         assertTrue(report.fieldCheck("Net Contents").observed.orEmpty().contains("paddleocr"))
+    }
+
+    @Test
+    fun passesTextFieldUsingCompatibilityNormalizedCandidate() = runBlocking {
+        val service = VerificationService(
+            StaticTextReader(
+                """
+                NORTH
+                PIER
+                ＳＰIＲIＴＳ
+                ${GovernmentWarning.TEXT}
+                """.trimIndent(),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: NORTH PIER SPIRITS",
+        )
+
+        assertEquals(CheckStatus.PASS, report.fieldCheck("Brand Name").status)
+        assertTrue(report.fieldCheck("Brand Name").observed.orEmpty().contains("nfkc-normalized"))
+        assertEquals(VerificationStatus.PASS, report.status)
     }
 
     @Test
@@ -360,6 +384,92 @@ class VerificationServiceTest {
         assertEquals(VerificationStatus.FAIL, report.status)
     }
 
+    @Test
+    fun failsGovernmentWarningWhenOnlyTesseractFindsUppercaseHeading() = runBlocking {
+        val service = VerificationService(
+            StaticImageTextReader(
+                ImageText(
+                    text = "combined",
+                    engine = "ensemble",
+                    sourceTexts = listOf(
+                        ImageTextSource(
+                            text = """
+                            ABC
+                            Government Warning:
+                            According to the Surgeon General, women should not drink alcoholic beverages
+                            during pregnancy because of the risk of birth defects.
+                            Consumption of alcoholic beverages impairs your ability to drive a car or operate
+                            machinery, and may cause health problems.
+                            """.trimIndent(),
+                            engine = "paddleocr",
+                        ),
+                        ImageTextSource(
+                            text = """
+                            ABC
+                            GOVERNMENT WARNING:
+                            According to the Surgeon General, women should not drink alcoholic beverages
+                            during pregnancy because of the risk of birth defects.
+                            Consumption of alcoholic beverages impairs your ability to drive a car or operate
+                            machinery, and may cause health problems.
+                            """.trimIndent(),
+                            engine = "tesseract-psm-11",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.governmentWarningCheck().status)
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
+    @Test
+    fun failsGovernmentWarningWhenOnlyTesseractReadsBody() = runBlocking {
+        val service = VerificationService(
+            StaticImageTextReader(
+                ImageText(
+                    text = "combined",
+                    engine = "ensemble",
+                    sourceTexts = listOf(
+                        ImageTextSource(
+                            text = """
+                            ABC
+                            GOVERNMENT WARNING:
+                            """.trimIndent(),
+                            engine = "paddleocr",
+                        ),
+                        ImageTextSource(
+                            text = """
+                            ABC
+                            GOVERNMENT WARNING:
+                            According to the Surgeon General, women should not drink alcoholic beverages
+                            during pregnancy because of the risk of birth defects.
+                            Consumption of alcoholic beverages impairs your ability to drive a car or operate
+                            machinery, and may cause health problems.
+                            """.trimIndent(),
+                            engine = "tesseract-psm-11",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.governmentWarningCheck().status)
+        assertTrue(report.governmentWarningCheck().observed.orEmpty().contains("paddleocr"))
+        assertFalse(report.governmentWarningCheck().observed.orEmpty().contains("tesseract-psm-11"))
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
     private fun labelid.domain.VerificationReport.governmentWarningCheck() =
         checks.first { it.fieldName == "Government Warning" }
 
@@ -370,7 +480,7 @@ class VerificationServiceTest {
         private val text: String,
     ) : ImageTextReader {
         override suspend fun readImage(image: ImageInput): ImageText =
-            ImageText(text = text, engine = "test")
+            ImageText(text = text, engine = "paddleocr")
     }
 
     private class StaticImageTextReader(
