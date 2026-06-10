@@ -58,8 +58,11 @@ class EnsembleImageTextReader(
     companion object {
         fun defaultReaders(): List<ImageTextReader> =
             listOf(
-                PaddleOcrImageTextReader(),
+                TesseractImageTextReader(pageSegmentationMode = 3),
+                TesseractImageTextReader(pageSegmentationMode = 4),
+                TesseractImageTextReader(pageSegmentationMode = 6),
                 TesseractImageTextReader(pageSegmentationMode = 11),
+                TesseractImageTextReader(pageSegmentationMode = 12),
             )
     }
 }

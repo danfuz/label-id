@@ -39,15 +39,6 @@ class VerificationService(
             }
 
             add(checkGovernmentWarning(textSources))
-            add(
-                FieldCheck(
-                    fieldName = "Government Warning Visual Style",
-                    expected = "Bold heading, required type size, legible contrast",
-                    observed = null,
-                    status = CheckStatus.NOT_ASSESSED,
-                    message = "Text-only OCR cannot reliably assess bold, type size, or contrast in v1.",
-                ),
-            )
         }
 
         return VerificationReport(
@@ -220,62 +211,61 @@ class VerificationService(
     }
 
     private fun checkGovernmentWarning(textSources: List<ImageTextSource>): FieldCheck {
-        val paddleSources = textSources.filter { it.isPaddleOcrSource() }
-        if (paddleSources.isEmpty()) {
+        if (textSources.isEmpty()) {
             return FieldCheck(
                 fieldName = "Government Warning",
                 expected = GovernmentWarning.TEXT,
                 observed = null,
                 status = CheckStatus.FAIL,
-                message = "Government warning verification requires PaddleOCR, but no PaddleOCR result was available. Check OCR Diagnostics.",
+                message = "Required government warning statement was not found by any OCR engine.",
             )
         }
 
-        val hasAuthoritativeHeading = paddleSources.any { GovernmentWarning.hasExactHeading(it.text) }
-
-        return bestSourceCheck(
-            fieldName = "Government Warning",
-            expected = GovernmentWarning.TEXT,
-            checks = paddleSources.map { source ->
-                checkGovernmentWarningInText(source.text, hasAuthoritativeHeading).withSource(source.engine)
-            },
-            failMessage = "Required government warning statement was not found by PaddleOCR.",
-        )
-    }
-
-    private fun checkGovernmentWarningInText(
-        actualText: String,
-        hasAuthoritativeHeading: Boolean,
-    ): FieldCheck {
-        val hasHeading = hasAuthoritativeHeading
-        if (hasHeading && TextNormalizer.containsLoose(actualText, GovernmentWarning.TEXT)) {
+        val headingSources = textSources.filter { GovernmentWarning.hasExactHeading(it.text) }
+        val exactStatementSource = headingSources.firstOrNull { TextNormalizer.containsLoose(it.text, GovernmentWarning.TEXT) }
+        if (exactStatementSource != null) {
             return FieldCheck(
                 fieldName = "Government Warning",
                 expected = GovernmentWarning.TEXT,
-                observed = "Found",
+                observed = "Found [${exactStatementSource.engine}]",
                 status = CheckStatus.PASS,
-                message = "Required warning statement text appears on the label with a PaddleOCR-confirmed heading.",
+                message = "Required warning statement text appears on the label with an OCR-confirmed heading.",
             )
         }
 
-        val foundAnchors = GovernmentWarning.ANCHOR_TOKENS.count { TextNormalizer.containsLoose(actualText, it) }
+        val hasHeading = headingSources.isNotEmpty()
+        val foundAnchors = GovernmentWarning.ANCHOR_TOKENS.filter { token ->
+            textSources.any { source -> TextNormalizer.containsLoose(source.text, token) }
+        }
         val expectedTokens = TextNormalizer.tokens(GovernmentWarning.TEXT).distinct()
-        val actualTokens = TextNormalizer.tokens(actualText).toSet()
+        val actualTokens = textSources.flatMap { TextNormalizer.tokens(it.text) }.toSet()
         val coverage = expectedTokens.count { it in actualTokens }.toDouble() / expectedTokens.size
+        val sourceNames = textSources.joinToString { it.engine }
         val observed = buildList {
-            add(if (hasHeading) "Paddle heading found" else "Paddle heading missing")
-            add("$foundAnchors/${GovernmentWarning.ANCHOR_TOKENS.size} anchors")
+            add(
+                if (hasHeading) {
+                    "heading found [${headingSources.joinToString { it.engine }}]"
+                } else {
+                    "heading missing"
+                },
+            )
+            add("${foundAnchors.size}/${GovernmentWarning.ANCHOR_TOKENS.size} anchors")
+            val missingAnchors = GovernmentWarning.ANCHOR_TOKENS - foundAnchors.toSet()
+            if (missingAnchors.isNotEmpty()) {
+                add("missing anchors: ${missingAnchors.joinToString()}")
+            }
             add("${(coverage * 100).toInt()}% token coverage")
+            add("OCR sources: $sourceNames")
         }.joinToString()
         val status = when {
-            hasHeading && foundAnchors == GovernmentWarning.ANCHOR_TOKENS.size && coverage >= 0.70 -> CheckStatus.PASS
-            hasHeading && foundAnchors >= GovernmentWarning.REVIEW_ANCHOR_THRESHOLD && coverage >= 0.50 -> CheckStatus.REVIEW
+            hasHeading && foundAnchors.size == GovernmentWarning.ANCHOR_TOKENS.size && coverage >= 0.70 -> CheckStatus.PASS
+            hasHeading && foundAnchors.size >= GovernmentWarning.REVIEW_ANCHOR_THRESHOLD && coverage >= 0.50 -> CheckStatus.REVIEW
             else -> CheckStatus.FAIL
         }
         val message = when (status) {
-            CheckStatus.PASS -> "Required warning statement is strongly supported by OCR tokens."
+            CheckStatus.PASS -> "Required warning statement is strongly supported by aggregate OCR tokens."
             CheckStatus.REVIEW -> "Government warning evidence is partial; review the label image."
-            CheckStatus.FAIL -> "Required government warning statement was not found with a PaddleOCR-confirmed heading."
+            CheckStatus.FAIL -> "Required government warning statement was not found with an OCR-confirmed heading."
             CheckStatus.NOT_ASSESSED -> error("Government warning text check is always assessed.")
         }
 
@@ -344,9 +334,6 @@ class VerificationService(
             observed = observed?.let { "$it [$engine]" },
             message = "$message OCR source: $engine.",
         )
-
-    private fun ImageTextSource.isPaddleOcrSource(): Boolean =
-        engine.lowercase(Locale.US).startsWith("paddleocr")
 
     private val CheckStatus.rank: Int
         get() = when (this) {
