@@ -172,16 +172,8 @@ fun LabelIdApp(window: Window? = null) {
                     modifier = Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    error?.let {
-                        SelectionContainer {
-                            ErrorPanel(it)
-                        }
-                    }
-                    report?.let {
-                        SelectionContainer {
-                            VerificationResults(it)
-                        }
-                    } ?: EmptyResults()
+                    error?.let { ErrorPanel(it) }
+                    report?.let { VerificationResults(it) } ?: EmptyResults()
                 }
             }
         }
@@ -267,29 +259,19 @@ private fun VerificationResults(report: VerificationReport) {
 
     Divider(Modifier.padding(vertical = 6.dp))
 
-    Text("OCR Text", style = MaterialTheme.typography.subtitle1, fontWeight = FontWeight.SemiBold)
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color.White, RoundedCornerShape(8.dp))
-            .border(1.dp, Color(0xFFD5D8DA), RoundedCornerShape(8.dp))
-            .padding(12.dp),
-    ) {
-        Text(report.imageText.text.ifBlank { "No text returned." })
-    }
+    CopyableTextPanel(
+        title = "OCR Text",
+        value = report.imageText.text.ifBlank { "No text returned." },
+        height = 220,
+    )
 
     if (report.imageText.diagnostics.isNotEmpty()) {
         Divider(Modifier.padding(vertical = 6.dp))
-        Text("OCR Diagnostics", style = MaterialTheme.typography.subtitle1, fontWeight = FontWeight.SemiBold)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.White, RoundedCornerShape(8.dp))
-                .border(1.dp, Color(0xFFD5D8DA), RoundedCornerShape(8.dp))
-                .padding(12.dp),
-        ) {
-            Text(report.imageText.diagnostics.joinToString(separator = "\n"))
-        }
+        CopyableTextPanel(
+            title = "OCR Diagnostics",
+            value = report.imageText.diagnostics.joinToString(separator = "\n"),
+            height = 160,
+        )
     }
 }
 
@@ -307,10 +289,14 @@ private fun CheckRow(check: FieldCheck) {
             Text(check.fieldName, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             CheckStatusChip(check.status)
         }
-        Text(check.message, color = Color(0xFF44484C))
-        Text("Expected: ${check.expected}", style = MaterialTheme.typography.caption, color = Color(0xFF5B6167))
-        check.observed?.let {
-            Text("Observed: $it", style = MaterialTheme.typography.caption, color = Color(0xFF5B6167))
+        SelectionContainer {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(check.message, color = Color(0xFF44484C))
+                Text("Expected: ${check.expected}", style = MaterialTheme.typography.caption, color = Color(0xFF5B6167))
+                check.observed?.let {
+                    Text("Observed: $it", style = MaterialTheme.typography.caption, color = Color(0xFF5B6167))
+                }
+            }
         }
     }
 }
@@ -334,8 +320,25 @@ private fun ErrorPanel(message: String) {
             .border(1.dp, Color(0xFFD56A4A), RoundedCornerShape(8.dp))
             .padding(12.dp),
     ) {
-        Text(message, color = Color(0xFF8C2F16))
+        SelectionContainer {
+            Text(message, color = Color(0xFF8C2F16))
+        }
     }
+}
+
+@Composable
+private fun CopyableTextPanel(
+    title: String,
+    value: String,
+    height: Int,
+) {
+    Text(title, style = MaterialTheme.typography.subtitle1, fontWeight = FontWeight.SemiBold)
+    OutlinedTextField(
+        value = value,
+        onValueChange = {},
+        readOnly = true,
+        modifier = Modifier.fillMaxWidth().height(height.dp),
+    )
 }
 
 @Composable

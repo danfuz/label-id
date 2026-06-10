@@ -17,50 +17,55 @@ class PaddleOcrImageTextReader(
     private val timeout: Duration = Duration.ofSeconds(45),
 ) : ImageTextReader {
     override suspend fun readImage(image: ImageInput): ImageText = withContext(Dispatchers.IO) {
+        val scriptPath = Files.createTempFile("label-id-paddleocr-", ".py")
+        Files.writeString(scriptPath, paddleOcrScript)
         val command = listOf(
             pythonExecutable,
-            "-c",
-            paddleOcrScript,
+            scriptPath.toAbsolutePath().toString(),
             image.path.toAbsolutePath().toString(),
         )
 
-        val process = try {
-            ProcessBuilder(command)
-                .apply { environment()["PADDLE_PDX_CACHE_HOME"] = cacheHome }
-                .redirectErrorStream(false)
-                .start()
-        } catch (ex: Exception) {
-            throw ImageTextReadException(
-                "Could not start PaddleOCR using `$pythonExecutable`. Install PaddleOCR and set " +
-                    "LABEL_ID_PADDLEOCR_PYTHON to its Python executable.",
-                ex,
+        try {
+            val process = try {
+                ProcessBuilder(command)
+                    .apply { environment()["PADDLE_PDX_CACHE_HOME"] = cacheHome }
+                    .redirectErrorStream(false)
+                    .start()
+            } catch (ex: Exception) {
+                throw ImageTextReadException(
+                    "Could not start PaddleOCR using `$pythonExecutable`. Install PaddleOCR and set " +
+                        "LABEL_ID_PADDLEOCR_PYTHON to its Python executable.",
+                    ex,
+                )
+            }
+
+            val finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                throw ImageTextReadException("PaddleOCR timed out after ${timeout.seconds} seconds.")
+            }
+
+            val stdout = process.inputStream.bufferedReader().readText().trim()
+            val stderr = process.errorStream.bufferedReader().readText().trim()
+            if (process.exitValue() != 0) {
+                throw ImageTextReadException(
+                    "PaddleOCR failed using `$pythonExecutable` with exit code ${process.exitValue()}: " +
+                        stderr.ifBlank { stdout.ifBlank { "no output" } },
+                )
+            }
+
+            val rawOutput = stdout.ifBlank { stderr }
+            val sources = extractPaddleTextSources(rawOutput)
+            ImageText(
+                text = sources.joinToString(separator = "\n\n") { it.text },
+                engine = "paddleocr",
+                confidence = null,
+                diagnostics = listOfNotNull(stderr.takeIf { stdout.isNotBlank() && it.isNotBlank() }),
+                sourceTexts = sources,
             )
+        } finally {
+            Files.deleteIfExists(scriptPath)
         }
-
-        val finished = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)
-        if (!finished) {
-            process.destroyForcibly()
-            throw ImageTextReadException("PaddleOCR timed out after ${timeout.seconds} seconds.")
-        }
-
-        val stdout = process.inputStream.bufferedReader().readText().trim()
-        val stderr = process.errorStream.bufferedReader().readText().trim()
-        if (process.exitValue() != 0) {
-            throw ImageTextReadException(
-                "PaddleOCR failed using `$pythonExecutable` with exit code ${process.exitValue()}: " +
-                    stderr.ifBlank { stdout.ifBlank { "no output" } },
-            )
-        }
-
-        val rawOutput = stdout.ifBlank { stderr }
-        val sources = extractPaddleTextSources(rawOutput)
-        ImageText(
-            text = sources.joinToString(separator = "\n\n") { it.text },
-            engine = "paddleocr",
-            confidence = null,
-            diagnostics = listOfNotNull(stderr.takeIf { stdout.isNotBlank() && it.isNotBlank() }),
-            sourceTexts = sources,
-        )
     }
 
     companion object {
