@@ -5,12 +5,13 @@ import kotlinx.coroutines.withContext
 import labelid.domain.ImageInput
 import labelid.domain.ImageText
 import labelid.domain.ImageTextSource
+import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 class PaddleOcrImageTextReader(
-    private val pythonExecutable: String = System.getenv("LABEL_ID_PADDLEOCR_PYTHON") ?: "python",
+    private val pythonExecutable: String = defaultPythonExecutable(),
     private val cacheHome: String = System.getenv("LABEL_ID_PADDLEOCR_CACHE_HOME")
         ?: Path.of(System.getProperty("user.home"), ".label-id", "paddleocr-cache").toString(),
     private val timeout: Duration = Duration.ofSeconds(45),
@@ -30,7 +31,8 @@ class PaddleOcrImageTextReader(
                 .start()
         } catch (ex: Exception) {
             throw ImageTextReadException(
-                "Could not start PaddleOCR. Install PaddleOCR and set LABEL_ID_PADDLEOCR_PYTHON to its Python executable.",
+                "Could not start PaddleOCR using `$pythonExecutable`. Install PaddleOCR and set " +
+                    "LABEL_ID_PADDLEOCR_PYTHON to its Python executable.",
                 ex,
             )
         }
@@ -45,7 +47,8 @@ class PaddleOcrImageTextReader(
         val stderr = process.errorStream.bufferedReader().readText().trim()
         if (process.exitValue() != 0) {
             throw ImageTextReadException(
-                "PaddleOCR failed with exit code ${process.exitValue()}: ${stderr.ifBlank { stdout.ifBlank { "no output" } }}",
+                "PaddleOCR failed using `$pythonExecutable` with exit code ${process.exitValue()}: " +
+                    stderr.ifBlank { stdout.ifBlank { "no output" } },
             )
         }
 
@@ -68,6 +71,44 @@ class PaddleOcrImageTextReader(
         private val quotedStringPattern = Regex("""'([^'\\]*(?:\\.[^'\\]*)*)'|"((?:\\.|[^"\\])*)"""")
         private const val REC_TEXT_MARKER = "__LABEL_ID_PADDLEOCR_REC_TEXT__"
         private const val SPATIAL_TEXT_MARKER = "__LABEL_ID_PADDLEOCR_SPATIAL_TEXT__"
+
+        fun defaultPythonExecutable(): String {
+            return selectDefaultPythonExecutable(
+                environment = System.getenv(),
+                userHome = System.getProperty("user.home"),
+                exists = Files::isRegularFile,
+            )
+        }
+
+        fun selectDefaultPythonExecutable(
+            environment: Map<String, String>,
+            userHome: String,
+            exists: (Path) -> Boolean,
+        ): String {
+            environment["LABEL_ID_PADDLEOCR_PYTHON"]
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+
+            return defaultPythonCandidates(environment, userHome)
+                .firstOrNull(exists)
+                ?.toString()
+                ?: "python"
+        }
+
+        private fun defaultPythonCandidates(
+            environment: Map<String, String>,
+            userHome: String,
+        ): List<Path> = buildList {
+            environment["LOCALAPPDATA"]
+                ?.takeIf { it.isNotBlank() }
+                ?.let { localAppData ->
+                    add(Path.of(localAppData, "label-id", "paddleocr-venv", "Scripts", "python.exe"))
+                }
+
+            add(Path.of(userHome, ".label-id", "paddleocr-venv", "Scripts", "python.exe"))
+            add(Path.of(userHome, ".label-id", "paddleocr-venv", "bin", "python"))
+            add(Path.of("/tmp", "label-id-paddleocr-venv", "bin", "python"))
+        }
 
         fun extractPaddleTextSources(output: String): List<ImageTextSource> {
             val recText = output.sectionAfterMarker(REC_TEXT_MARKER, SPATIAL_TEXT_MARKER)

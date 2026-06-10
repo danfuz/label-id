@@ -1,9 +1,39 @@
 package labelid.ocr
 
+import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class PaddleOcrImageTextReaderTest {
+    @Test
+    fun usesConfiguredPaddlePythonExecutableFirst() {
+        assertEquals(
+            "C:\\custom\\python.exe",
+            PaddleOcrImageTextReader.selectDefaultPythonExecutable(
+                environment = mapOf(
+                    "LABEL_ID_PADDLEOCR_PYTHON" to "C:\\custom\\python.exe",
+                    "LOCALAPPDATA" to "C:\\Users\\dev\\AppData\\Local",
+                ),
+                userHome = "C:\\Users\\dev",
+                exists = { true },
+            ),
+        )
+    }
+
+    @Test
+    fun fallsBackToStandardWindowsPaddleVenvPath() {
+        val expected = Path.of("C:\\Users\\dev\\AppData\\Local", "label-id", "paddleocr-venv", "Scripts", "python.exe")
+
+        assertEquals(
+            expected.toString(),
+            PaddleOcrImageTextReader.selectDefaultPythonExecutable(
+                environment = mapOf("LOCALAPPDATA" to "C:\\Users\\dev\\AppData\\Local"),
+                userHome = "C:\\Users\\dev",
+                exists = { it == expected },
+            ),
+        )
+    }
+
     @Test
     fun extractsRecognizedTextLinesFromPaddleOutput() {
         val output = """
