@@ -429,6 +429,27 @@ class VerificationServiceTest {
     }
 
     @Test
+    fun failsGovernmentWarningWhenNoPaddleSourceIsAvailable() = runBlocking {
+        val service = VerificationService(
+            StaticImageTextReader(
+                ImageText(
+                    text = GovernmentWarning.TEXT,
+                    engine = "tesseract-psm-11",
+                ),
+            ),
+        )
+
+        val report = service.verify(
+            image = ImageInput(Path.of("label.png")),
+            rawApplicationText = "Brand Name: ABC",
+        )
+
+        assertEquals(CheckStatus.FAIL, report.governmentWarningCheck().status)
+        assertTrue(report.governmentWarningCheck().message.contains("requires PaddleOCR"))
+        assertEquals(VerificationStatus.FAIL, report.status)
+    }
+
+    @Test
     fun failsGovernmentWarningWhenOnlyTesseractReadsBody() = runBlocking {
         val service = VerificationService(
             StaticImageTextReader(

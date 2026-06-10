@@ -221,6 +221,16 @@ class VerificationService(
 
     private fun checkGovernmentWarning(textSources: List<ImageTextSource>): FieldCheck {
         val paddleSources = textSources.filter { it.isPaddleOcrSource() }
+        if (paddleSources.isEmpty()) {
+            return FieldCheck(
+                fieldName = "Government Warning",
+                expected = GovernmentWarning.TEXT,
+                observed = null,
+                status = CheckStatus.FAIL,
+                message = "Government warning verification requires PaddleOCR, but no PaddleOCR result was available. Check OCR Diagnostics.",
+            )
+        }
+
         val hasAuthoritativeHeading = paddleSources.any { GovernmentWarning.hasExactHeading(it.text) }
 
         return bestSourceCheck(
