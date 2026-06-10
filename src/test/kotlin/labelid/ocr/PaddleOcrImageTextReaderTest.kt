@@ -3,6 +3,8 @@ package labelid.ocr
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class PaddleOcrImageTextReaderTest {
     @Test
@@ -32,6 +34,14 @@ class PaddleOcrImageTextReaderTest {
                 exists = { it == expected },
             ),
         )
+    }
+
+    @Test
+    fun embeddedPaddleScriptAvoidsMultilineReturnListExpression() {
+        val script = PaddleOcrImageTextReader.paddleOcrScriptForTesting()
+
+        assertFalse(script.contains("return ["))
+        assertTrue(script.contains("return spatial_output"))
     }
 
     @Test

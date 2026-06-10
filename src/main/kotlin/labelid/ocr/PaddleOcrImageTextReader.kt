@@ -155,7 +155,10 @@ class PaddleOcrImageTextReader(
             SPATIAL_TEXT_MARKER = "$SPATIAL_TEXT_MARKER"
 
             def box_values(box):
-                return [int(value) for value in box]
+                values = []
+                for value in box:
+                    values.append(int(value))
+                return values
 
             def overlaps_vertically(left, right):
                 overlap = min(left[3], right[3]) - max(left[1], right[1])
@@ -188,10 +191,15 @@ class PaddleOcrImageTextReader(
                             break
                     else:
                         lines.append([row])
-                return [
-                    " ".join(row["text"] for row in sorted(line, key=lambda item: item["box"][0]))
-                    for line in sorted(lines, key=lambda line: sum((row["box"][1] + row["box"][3]) / 2 for row in line) / len(line))
-                ]
+                spatial_output = []
+                sorted_lines = sorted(
+                    lines,
+                    key=lambda line: sum((row["box"][1] + row["box"][3]) / 2 for row in line) / len(line),
+                )
+                for line in sorted_lines:
+                    sorted_line = sorted(line, key=lambda item: item["box"][0])
+                    spatial_output.append(" ".join(row["text"] for row in sorted_line))
+                return spatial_output
 
             ocr = PaddleOCR(
                 use_doc_orientation_classify=False,
@@ -215,6 +223,8 @@ class PaddleOcrImageTextReader(
             print(SPATIAL_TEXT_MARKER)
             print("\n".join(spatial_texts))
         """.trimIndent()
+
+        fun paddleOcrScriptForTesting(): String = paddleOcrScript
 
         private fun String.sectionAfterMarker(
             startMarker: String,
