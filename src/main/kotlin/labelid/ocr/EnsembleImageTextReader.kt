@@ -63,6 +63,7 @@ class EnsembleImageTextReader(
                 TesseractImageTextReader(pageSegmentationMode = 6),
                 TesseractImageTextReader(pageSegmentationMode = 11),
                 TesseractImageTextReader(pageSegmentationMode = 12),
+                RapidOcrImageTextReader(),
             )
     }
 }
